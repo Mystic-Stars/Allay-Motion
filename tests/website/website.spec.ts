@@ -522,6 +522,13 @@ test('T-WEB-17 体素雕塑能玩（真实的鼠标输入）：划过拨开方�
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await ensureVoxelAllay(page);
   const world = page.getByTestId('world');
+  const renderer = await world.evaluate((element) => {
+    const gl = (element as HTMLCanvasElement).getContext('webgl2');
+    if (!gl) return 'none';
+    const extension = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  });
+  const frameTimeout = isSoftwareRenderer(renderer) ? 20_000 : 3_000;
   await expect(world).toHaveAttribute('data-form', 'allay', { timeout: 20_000 });
   await expect(world).toHaveAttribute('data-settled', 'true', { timeout: 6000 });
   type W = { stir: () => number; yaw: () => number };
@@ -535,10 +542,17 @@ test('T-WEB-17 体素雕塑能玩（真实的鼠标输入）：划过拨开方�
   await page.waitForTimeout(1800);
   const idle = await stir();
   // 快速划过悦灵：留下一道拨开的轨迹（轨迹的总强度明显上去），一秒多以后流回原位
-  await page.mouse.move(box.x - 40, cy);
-  await page.mouse.move(box.x + box.width + 40, cy + 20, { steps: 14 });
-  expect(await stir()).toBeGreaterThan(idle + 1);
-  await expect.poll(stir, { timeout: 3000 }).toBeLessThan(idle + 0.2);
+  const fromX = box.x - 40;
+  const toX = box.x + box.width + 40;
+  let peak = idle;
+  for (let i = 0; i <= 24; i++) {
+    const p = i / 24;
+    await page.mouse.move(fromX + (toX - fromX) * p, cy + 20 * p);
+    await page.waitForTimeout(25);
+    peak = Math.max(peak, await stir());
+  }
+  expect(peak).toBeGreaterThan(idle + 1);
+  await expect.poll(stir, { timeout: frameTimeout }).toBeLessThan(idle + 0.2);
   // 指针在雕塑的框里：光标是“可抓”
   await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3, { steps: 5 });
   await expect(page.locator('html')).toHaveAttribute('data-world-hover', 'true');
