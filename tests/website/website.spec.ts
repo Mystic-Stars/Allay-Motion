@@ -543,15 +543,26 @@ test('T-WEB-17 体素雕塑能玩（真实的鼠标输入）：划过拨开方�
   await page.waitForTimeout(1800);
   const idle = await stir();
   // 快速划过悦灵：留下一道拨开的轨迹（轨迹的总强度明显上去），一秒多以后流回原位
-  const fromX = box.x - 40;
-  const toX = box.x + box.width + 40;
-  let peak = idle;
-  for (let i = 0; i <= 24; i++) {
-    const p = i / 24;
-    await page.mouse.move(fromX + (toX - fromX) * p, cy + 20 * p);
-    await page.waitForTimeout(25);
-    peak = Math.max(peak, await stir());
-  }
+  await page.evaluate(() => {
+    const root = window as unknown as {
+      __siteWorld: { stir(): number };
+      __siteStirProbe?: { peak: number; active: boolean };
+    };
+    const probe = { peak: root.__siteWorld.stir(), active: true };
+    root.__siteStirProbe = probe;
+    const sample = () => {
+      probe.peak = Math.max(probe.peak, root.__siteWorld.stir());
+      if (probe.active) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await page.mouse.move(box.x - 40, cy);
+  await page.mouse.move(box.x + box.width + 40, cy + 20, { steps: 14 });
+  const peak = await page.evaluate(() => {
+    const probe = (window as unknown as { __siteStirProbe: { peak: number; active: boolean } }).__siteStirProbe;
+    probe.active = false;
+    return probe.peak;
+  });
   expect(peak).toBeGreaterThan(idle + 1);
   await expect.poll(stir, { timeout: frameTimeout }).toBeLessThan(idle + 0.2);
   // 指针在雕塑的框里：光标是“可抓”
