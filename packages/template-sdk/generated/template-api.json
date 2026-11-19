@@ -10,6 +10,13 @@
       "doc": "three.js（r187）。只声明了常用的类和成员，见本文件末尾的 THREE 命名空间；没列出的成员运行时照样可用"
     },
     {
+      "name": "locale",
+      "kind": "property",
+      "optional": false,
+      "signature": "readonly locale: string;",
+      "doc": "宿主在装载时提供的语言标签，例如 zh-CN；省略时为 en"
+    },
+    {
       "name": "params",
       "kind": "property",
       "optional": false,
@@ -66,6 +73,13 @@
           "doc": "已设好过滤和色彩空间的贴图；缺失时返回占位图并记一条警告。.mcmeta 动画由引擎按 t 自动播放"
         },
         {
+          "name": "optionalTexture",
+          "kind": "method",
+          "optional": false,
+          "signature": "optionalTexture(id: string): Promise<THREE.Texture | null>;",
+          "doc": "同一已授权资源栈和原 ID；取不到时返回 null，不返回占位贴图。同一资源代内缓存探测结果"
+        },
+        {
           "name": "block",
           "kind": "method",
           "optional": false,
@@ -86,14 +100,28 @@
       "kind": "property",
       "optional": false,
       "signature": "text: { … };",
-      "doc": "用资源栈里的字体排一段文字",
+      "doc": "用资源栈字体及本机系统字体排一段文字",
       "members": [
+        {
+          "name": "prepare",
+          "kind": "method",
+          "optional": false,
+          "signature": "prepare(font: string): Promise<void>;",
+          "doc": "按 font 参数声明的字体自动预载；程序生成的字体 ID 可在 setup 里显式预载"
+        },
+        {
+          "name": "measureGui",
+          "kind": "method",
+          "optional": false,
+          "signature": "measureGui(text: string, font?: string): GuiTextMetrics;",
+          "doc": "量一行 GUI 文字的笔宽和基线边界，与 create 选用相同字形，不创建文字贴图或场景对象。"
+        },
         {
           "name": "create",
           "kind": "method",
           "optional": false,
-          "signature": "create(opts: TextOptions): TextObject",
-          "doc": "建一个文字对象；字体已在 setup 之前载好，所以是同步的"
+          "signature": "create(opts: TextOptions): TextObject;",
+          "doc": "同步创建文字；逐字使用已选资源栈字体、minecraft:default、本机系统字体"
         }
       ]
     },
@@ -168,7 +196,7 @@
           "name": "cue",
           "kind": "method",
           "optional": false,
-          "signature": "cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number }): void",
+          "signature": "cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number; position?: readonly [x: number, y: number, z: number] }): void",
           "doc": "在时刻 at（秒）播放音效事件；只能在 setup 里调用。sound 为 null 时什么也不做"
         }
       ]
@@ -177,8 +205,8 @@
       "name": "warn",
       "kind": "method",
       "optional": false,
-      "signature": "warn(message: string): void;",
-      "doc": "记一条警告，显示在应用里（一次装载最多 50 条）"
+      "signature": "warn(message: string, code?: 'panorama-fallback'): void;",
+      "doc": "记一条警告（一次装载最多 50 条）；实际回退时可在 setup 内附上资源提示码，宿主据此显示简短提示。"
     }
   ],
   "types": {
@@ -219,6 +247,13 @@
           "optional": false,
           "signature": "pixelScale: number;",
           "doc": "输出短边像素 / 1080"
+        },
+        {
+          "name": "referenceSize",
+          "kind": "property",
+          "optional": true,
+          "signature": "referenceSize?: Readonly<{ width: number; height: number }>;",
+          "doc": "输出未缩小前的参考像素尺寸；缺省时由 width、height 和 pixelScale 推出。"
         }
       ]
     },
@@ -398,6 +433,13 @@
           "doc": ""
         },
         {
+          "name": "font",
+          "kind": "property",
+          "optional": true,
+          "signature": "font?: string;",
+          "doc": "资源栈字体 ID，默认 minecraft:default。逐字回退到 minecraft:default，再用系统字体；旧字体引用等同默认。"
+        },
+        {
           "name": "size",
           "kind": "property",
           "optional": false,
@@ -431,11 +473,58 @@
           "optional": true,
           "signature": "maxWidth?: number;",
           "doc": "设计单位；超过时按空格（中日韩字符逐字）换行"
+        },
+        {
+          "name": "origin",
+          "kind": "property",
+          "optional": true,
+          "signature": "origin?: 'guiBaseline';",
+          "doc": "单行 GUI 度量：纵向原点为基线，使用字体的逻辑字号而非源像素尺寸。"
+        }
+      ]
+    },
+    "GuiTextMetrics": {
+      "doc": "",
+      "members": [
+        {
+          "name": "advance",
+          "kind": "property",
+          "optional": false,
+          "signature": "advance: number;",
+          "doc": "以 GUI 像素计的笔尖前进量和绘制宽度。"
+        },
+        {
+          "name": "width",
+          "kind": "property",
+          "optional": false,
+          "signature": "width: number;",
+          "doc": ""
+        },
+        {
+          "name": "left",
+          "kind": "property",
+          "optional": false,
+          "signature": "left: number;",
+          "doc": "字形越出笔尖左侧时为负，单位为 GUI 像素。"
+        },
+        {
+          "name": "above",
+          "kind": "property",
+          "optional": false,
+          "signature": "above: number;",
+          "doc": "字形范围在基线以上、以下的 GUI 像素数。"
+        },
+        {
+          "name": "below",
+          "kind": "property",
+          "optional": false,
+          "signature": "below: number;",
+          "doc": ""
         }
       ]
     },
     "TextObject": {
-      "doc": "文字对象。原点：水平方向按 align（左边、中点、右边），垂直方向在整段文字的中线",
+      "doc": "文字对象。默认纵向原点在整段文字中线；guiBaseline 模式用基线，左对齐以笔尖为横向原点。",
       "members": [
         {
           "name": "object",
@@ -512,6 +601,25 @@
         }
       ]
     },
+    "EffectiveTiming": {
+      "doc": "已生效的阶段时长（秒），键与 manifest.timeline.segments 对应。",
+      "members": [
+        {
+          "name": "durations",
+          "kind": "property",
+          "optional": false,
+          "signature": "durations: Readonly<Record<string, number>>;",
+          "doc": ""
+        },
+        {
+          "name": "editable",
+          "kind": "property",
+          "optional": false,
+          "signature": "editable: boolean;",
+          "doc": "当前阶段是否由对应的 duration 参数控制。"
+        }
+      ]
+    },
     "TemplateInstance": {
       "doc": "",
       "members": [
@@ -528,6 +636,13 @@
           "optional": true,
           "signature": "cutTime?: number | null;",
           "doc": "转场类必填"
+        },
+        {
+          "name": "timing",
+          "kind": "property",
+          "optional": true,
+          "signature": "timing?: EffectiveTiming;",
+          "doc": "参数与实际阶段不一定相等时，返回这次装载使用的时长。"
         },
         {
           "name": "update",

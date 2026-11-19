@@ -6,8 +6,8 @@ import mc from 'virtual:allay-website-mc';
 
 const files = new Set(mc?.files ?? []);
 
-/** 提取过的游戏版本；没有提取时为 null（官网退回生成的纯色色块） */
-export const mcGameVersion: string | null = mc?.gameVersion ?? null;
+/** 官网展示资源的版本；没有索引时为 null，不假设访客授权了本机游戏。 */
+export const mcGameVersion: string | null = files.size && mc ? mc.gameVersion : null;
 
 function url(path: string): string {
   return new URL(`mc/${path}`, document.baseURI).href;

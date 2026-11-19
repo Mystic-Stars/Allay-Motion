@@ -13,7 +13,9 @@ import type { TemplateService } from '../../apps/desktop/src/main/templates/serv
 import { TEMPLATE_JSCONFIG, templateJsconfigText } from '../../apps/desktop/src/shared/template-dev';
 import type { TemplateDevChange } from '../../apps/desktop/src/shared/templates';
 import { analyzeTemplateCode } from '../../apps/desktop/src/shared/template-code';
-import { BASE_CODE, baseManifest, buildBuiltins, log, makeService } from './helpers/template-fixtures';
+import { BASE_CODE, baseManifest, log, makeService } from './helpers/template-fixtures';
+import { catalogIds } from '../fixtures/builtin-catalog';
+import { buildTemplates } from '../../scripts/build-templates';
 
 const DEBOUNCE = 60;
 /** 文件系统事件的到达和防抖都需要时间：等到“安静”之后再判断 */
@@ -170,7 +172,7 @@ describe('模板开发模式：复制内置模板、写类型定义、打开文�
 
   beforeAll(async () => {
     base = realpathSync.native(mkdtempSync(join(tmpdir(), 'allay-dev-')));
-    await buildBuiltins(join(base, 'builtin'));
+    await buildTemplates(join(base, 'builtin'));
   }, 60_000);
 
   afterAll(() => rmSync(base, { recursive: true, force: true }));
@@ -233,18 +235,24 @@ describe('模板开发模式：复制内置模板、写类型定义、打开文�
       ],
     };
     const builtins = svc.list().filter((x) => x.source === 'builtin');
-    expect(builtins).toHaveLength(6);
+    expect(builtins.map(({ id }) => id).sort()).toEqual(catalogIds);
+    const files = new Map<string, string>();
     for (const e of builtins) {
       const r = await dev.copyBuiltin({ id: e.id, version: e.version });
       if (!r.ok) throw new Error(r.error);
       const dir = svc.userTemplateDir(r.entry.id, '1.0.0')!;
-      const program = ts.createProgram({ rootNames: [join(dir, 'template.js')], options });
-      const diagnostics = ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'));
-      expect(diagnostics, e.id).toEqual(known[e.id] ?? []);
+      files.set(e.id, join(dir, 'template.js'));
       // 复制出来的代码照样通过安装时的源码预检，没有规则提示
       expect(await analyzeTemplateCode(readFileSync(join(dir, 'template.js'), 'utf8'))).toEqual([]);
     }
-  });
+    const program = ts.createProgram({ rootNames: [...files.values()], options });
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    for (const [id, file] of files) {
+      expect(diagnostics.filter(diagnostic => diagnostic.file?.fileName === file.replaceAll('\\', '/'))
+        .map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')), id).toEqual(known[id] ?? []);
+    }
+    expect(diagnostics).toHaveLength(Object.values(known).flat().length);
+  }, 120_000);
 
   it('只能复制内置的脚本模板', async () => {
     expect(await dev.copyBuiltin({ id: 'allay.builtin.nope', version: '1.0.0' })).toEqual({ ok: false, error: 'not-found' });

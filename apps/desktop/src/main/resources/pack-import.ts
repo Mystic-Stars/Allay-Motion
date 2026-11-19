@@ -1,9 +1,9 @@
 // 添加资源包（docs/03-assets.md 3.5）：zip 先校验，通过后复制到 userData/packs/<内容哈希>.zip。
 // 校验不过（条目名含 `..`、绝对路径等）时什么也不写（T-AST-5）。
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { openZip, ZipRejectedError } from './zip';
 
 export const PACKS_DIR = 'packs';
@@ -35,7 +35,7 @@ export async function importZipPack(source: string, userDataDir: string): Promis
   if (!st.isFile()) throw new ZipRejectedError('不是文件');
   const dir = join(userDataDir, PACKS_DIR);
   await mkdir(dir, { recursive: true });
-  const tmp = join(dir, `.import-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join(dir, `.import-${randomUUID()}.tmp`);
   try {
     await copyFile(source, tmp);
     const zip = await openZip(tmp);
@@ -58,6 +58,11 @@ export async function importZipPack(source: string, userDataDir: string): Promis
     await rm(tmp, { force: true });
     throw err;
   }
+}
+
+export function packArchiveType(path: string): 'zip' | 'mcpack' | null {
+  const ext = extname(path).toLowerCase();
+  return ext === '.zip' ? 'zip' : ext === '.mcpack' ? 'mcpack' : null;
 }
 
 /** 设置里记的 zip 文件名 → 绝对路径。文件名必须是 <sha256>.zip，防止设置文件被改成任意路径 */

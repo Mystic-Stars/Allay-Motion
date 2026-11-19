@@ -33,6 +33,8 @@ interface UiState {
   /** 左右面板当前的标签页（注册表里面板的 id） */
   leftTab: string;
   rightTab: string;
+  workspaceView: 'preview' | 'code';
+  codeOpened: boolean;
   /** 模板库的搜索词 */
   galleryQuery: string;
   /** 预设保存、导入后加一，让各处的预设列表重新取 */
@@ -99,6 +101,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   settingsPage: 'general',
   leftTab: 'templates',
   rightTab: 'props',
+  workspaceView: 'preview',
+  codeOpened: false,
   galleryQuery: '',
   presetsVersion: 0,
   searchOpen: false,

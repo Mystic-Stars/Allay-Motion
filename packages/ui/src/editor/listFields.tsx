@@ -1,7 +1,11 @@
+import { DndContext, PointerSensor, pointerWithin, useSensor, type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn } from 'cn';
-import { ImageSquare, Plus, X } from '@phosphor-icons/react';
-import { useEffect, useMemo, useState } from 'react';
+import { CaretDown, CaretUp, DotsSixVertical, ImageSquare, Plus, X } from '@phosphor-icons/react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { Input } from '../components/ui/misc';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { ICON } from '../lib/icons';
@@ -16,70 +20,194 @@ export interface BlockListEntry {
   weight: number;
 }
 
-/** BlockListField：多个方块芯片，每个带权重（可拖拽调值），可增删 */
-export function BlockListField({ value, onChange, max = 64, label, testId }: { value: readonly BlockListEntry[]; onChange(v: BlockListEntry[]): void; max?: number; label: string; testId?: string }) {
-  const editor = useEditor();
-  const byId = useMemo(() => new Map(editor.blocks.map((b) => [b.id, b])), [editor.blocks]);
-  const update = (i: number, patch: Partial<BlockListEntry>) => onChange(value.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+const RAINBOW_CONCRETE = ['red', 'orange', 'yellow', 'lime', 'light_blue', 'blue', 'purple'].map((color) => `minecraft:${color}_concrete`);
+const SHORT_LIST_LIMIT = 3;
+const SUMMARY_LIMIT = 7;
+const quietAction = 'text-fg-subtle opacity-70 group-hover/block:opacity-100 group-focus-within/block:opacity-100';
+const quietDrag = () => undefined;
+const dragAccessibility = { announcements: { onDragStart: quietDrag, onDragOver: quietDrag, onDragEnd: quietDrag, onDragCancel: quietDrag } };
+
+function SortableBlockRow({ id, name, children, canMove, onMove }: { id: number; name: string; children: ReactNode; canMove: [boolean, boolean]; onMove(delta: number, button: HTMLButtonElement): void }) {
+  const { t } = useEditor();
+  const { setNodeRef, setActivatorNodeRef, listeners, transform, transition, isDragging } = useSortable({ id });
   return (
-    <div className="flex min-w-0 flex-col gap-1" role="group" aria-label={label} data-testid={testId}>
-      {value.map((entry, i) => {
-        const name = entryName(byId.get(entry.id), entry.id, editor.locale);
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn('group/block relative flex h-8 min-w-0 items-center gap-0.5 rounded-md bg-control pr-1', isDragging && 'z-10 shadow-float')}
+    >
+      <span
+        ref={setActivatorNodeRef}
+        {...listeners}
+        title={t('blockList.drag', { name })}
+        aria-hidden="true"
+        className={cn('flex h-8 w-6 shrink-0 touch-none cursor-grab items-center justify-center active:cursor-grabbing', quietAction)}
+      >
+        <DotsSixVertical size={ICON.md} />
+      </span>
+      {children}
+      {canMove.some(Boolean) && ([CaretUp, CaretDown] as const).map((Icon, index) => {
+        const label = t(index === 0 ? 'blockList.moveUp' : 'blockList.moveDown', { name });
         return (
-          <div key={`${entry.id}-${i}`} className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-control pr-1 pl-[5px]">
-            <ResourcePickerPopover
-              kind="block"
-              value={entry.id}
-              label={editor.t('blockList.replace', { name })}
-              onPick={(id) => update(i, { id })}
-              trigger={
-                <PopoverTrigger aria-label={editor.t('blockList.replace', { name })} className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left text-foreground">
-                  <ResourceThumb kind="block" id={entry.id} size={22} className="rounded-[4px]" />
-                  <span className="truncate" title={entry.id}>
-                    {name}
-                  </span>
-                </PopoverTrigger>
-              }
-            />
-            <ScrubNumberField
-              value={entry.weight}
-              onChange={(w) => update(i, { weight: w })}
-              min={0}
-              max={1000}
-              step={0.1}
-              decimals={1}
-              label={editor.t('blockList.weight', { name })}
-              lead={<span className="num">×</span>}
-              bare
-              className="w-16 shrink-0"
-            />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-fg-subtle"
-              aria-label={editor.t('blockList.remove', { name })}
-              disabled={value.length <= 1}
-              onClick={() => onChange(value.filter((_, j) => j !== i))}
-            >
-              <X size={ICON.xs} />
-            </Button>
-          </div>
+          <Button key={index} type="button" size="icon-sm" variant="ghost" aria-label={label} title={label} aria-disabled={!canMove[index]} className={cn(quietAction, 'aria-disabled:opacity-45')} onClick={(event) => canMove[index] && onMove(index === 0 ? -1 : 1, event.currentTarget)}>
+            <Icon size={ICON.xs} />
+          </Button>
         );
       })}
+    </li>
+  );
+}
+
+/** BlockListField：多个方块芯片，每个带权重，可增删和排序 */
+export function BlockListField({ value, onChange, max = 64, label, testId }: { value: readonly BlockListEntry[]; onChange(v: BlockListEntry[]): void; max?: number; label: string; testId?: string }) {
+  const editor = useEditor();
+  const dndId = useId();
+  const listId = useId();
+  const pointerSensor = useSensor(PointerSensor, { activationConstraint: { distance: 4 } });
+  const [slots, setSlots] = useState(() => Array.from({ length: 64 }, (_, index) => index));
+  const [announcement, setAnnouncement] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const list = useRef<HTMLOListElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  const focusAfterEdit = useRef<HTMLElement | 'last' | null>(null);
+  const long = value.length > SHORT_LIST_LIMIT;
+  const showRows = !long || expanded;
+  const byId = useMemo(() => new Map(editor.blocks.map((b) => [b.id, b])), [editor.blocks]);
+  const names = value.map(({ id }) => entryName(byId.get(id), id, editor.locale));
+  const supportsRainbow = max >= RAINBOW_CONCRETE.length && RAINBOW_CONCRETE.every((id) => byId.has(id));
+  const rowIds = slots.slice(0, value.length);
+  useLayoutEffect(() => {
+    const next = focusAfterEdit.current;
+    focusAfterEdit.current = null;
+    if (next === 'last') {
+      (expandButton.current ?? list.current?.lastElementChild?.querySelector('button'))?.focus();
+    } else {
+      next?.focus({ preventScroll: true });
+    }
+  }, [slots, value]);
+  const update = (i: number, patch: Partial<BlockListEntry>) => onChange(value.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+  const reorder = (from: number, to: number) => {
+    if (from < 0 || to < 0 || to >= value.length || from === to) return;
+    setSlots(arrayMove(slots, from, to));
+    onChange(arrayMove([...value], from, to));
+    setAnnouncement(editor.t('blockList.moved', { name: names[from]!, position: to + 1 }));
+  };
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (over) reorder(rowIds.indexOf(Number(active.id)), rowIds.indexOf(Number(over.id)));
+  };
+  return (
+    <div className="flex min-w-0 flex-col gap-1" role="group" aria-label={label} data-testid={testId}>
+      {(long || expanded) && (
+        <div className="flex flex-wrap items-center justify-between gap-x-1">
+          {!showRows && (
+            <div role="img" aria-label={names.join(', ')} className="flex items-center gap-0.5 rounded-md bg-control px-1 py-1">
+              {value.slice(0, SUMMARY_LIMIT).map(({ id }, index) => (
+                <span key={rowIds[index]} title={names[index]}><ResourceThumb kind="block" id={id} size={16} className="rounded-sm" /></span>
+              ))}
+              {value.length > SUMMARY_LIMIT && <span aria-hidden="true" className="num px-0.5 text-xs text-fg-subtle">+{value.length - SUMMARY_LIMIT}</span>}
+            </div>
+          )}
+          <Button ref={expandButton} variant="ghost" size="sm" className="ml-auto" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>
+            {expanded ? <CaretUp size={ICON.xs} /> : <CaretDown size={ICON.xs} />}
+            {editor.t(expanded ? 'blockList.collapse' : 'blockList.editOrder')}
+          </Button>
+        </div>
+      )}
+      <DndContext id={dndId} sensors={[pointerSensor]} collisionDetection={pointerWithin} onDragEnd={onDragEnd} accessibility={dragAccessibility}>
+        <SortableContext items={showRows ? rowIds : []} strategy={verticalListSortingStrategy}>
+          <ol id={listId} ref={list} className={showRows ? 'flex flex-col gap-1' : undefined} hidden={!showRows}>
+            {showRows && value.map((entry, index) => {
+              const name = names[index]!;
+              return (
+                <SortableBlockRow key={rowIds[index]} id={rowIds[index]!} name={name} canMove={[index > 0, index + 1 < value.length]} onMove={(delta, button) => {
+                  focusAfterEdit.current = button;
+                  reorder(index, index + delta);
+                }}>
+                  <ResourcePickerPopover
+                    kind="block"
+                    value={entry.id}
+                    label={editor.t('blockList.replace', { name })}
+                    onPick={(id) => update(index, { id })}
+                    trigger={
+                      <PopoverTrigger aria-label={editor.t('blockList.replace', { name })} className="flex h-control min-w-0 flex-1 items-center gap-2 rounded-md text-left text-foreground hover:bg-control-hi">
+                        <ResourceThumb kind="block" id={entry.id} size={22} className="rounded-[4px]" />
+                        <span className="truncate" title={entry.id}>{name}</span>
+                      </PopoverTrigger>
+                    }
+                  />
+                  <ScrubNumberField
+                    value={entry.weight}
+                    onChange={(weight) => update(index, { weight })}
+                    min={0}
+                    max={1000}
+                    step={0.1}
+                    decimals={1}
+                    label={editor.t('blockList.weight', { name })}
+                    lead={<span className="num">×</span>}
+                    bare
+                    className="w-14 shrink-0"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className={quietAction}
+                    aria-label={editor.t('blockList.remove', { name })}
+                    disabled={value.length <= 1}
+                    onClick={() => {
+                      const neighbor = list.current?.children[index + (index + 1 < value.length ? 1 : -1)];
+                      focusAfterEdit.current = neighbor?.querySelector('button') ?? null;
+                      setSlots(arrayMove(slots, index, slots.length - 1));
+                      onChange(value.filter((_, entryIndex) => entryIndex !== index));
+                    }}
+                  >
+                    <X size={ICON.xs} />
+                  </Button>
+                </SortableBlockRow>
+              );
+            })}
+          </ol>
+        </SortableContext>
+      </DndContext>
+      <span role="status" className="sr-only">{announcement}</span>
+      <div className="flex flex-wrap items-center gap-0.5">
       {value.length < max && (
         <ResourcePickerPopover
           kind="block"
           value={null}
           label={editor.t('blockList.add')}
-          onPick={(id) => onChange([...value, { id, weight: 1 }])}
+          onPick={(id) => {
+            if (value.length + 1 === max) focusAfterEdit.current = 'last';
+            onChange([...value, { id, weight: 1 }]);
+          }}
           trigger={
-            <PopoverTrigger className="inline-flex h-[30px] items-center gap-2 rounded-lg px-2.5 text-fg-muted shadow-[inset_0_0_0_1px_var(--control-hi)] hover:bg-control hover:text-foreground" data-testid={testId ? `${testId}-add` : undefined}>
+            <PopoverTrigger render={<Button variant="ghost" size="sm" />} data-testid={testId ? `${testId}-add` : undefined}>
               <Plus size={ICON.xs + 1} />
               {editor.t('blockList.add')}
             </PopoverTrigger>
           }
         />
       )}
+      {supportsRainbow && (
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+            {editor.t('blockList.presets')} <CaretDown size={ICON.xs} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem
+              title={editor.t('blockList.rainbowHint')}
+              data-testid={testId ? `${testId}-rainbow` : undefined}
+              onClick={() => {
+                onChange(RAINBOW_CONCRETE.map((id) => ({ id, weight: 1 })));
+                setExpanded(false);
+                setAnnouncement(editor.t('blockList.rainbowApplied'));
+              }}
+            >
+              {editor.t('blockList.rainbow')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      </div>
     </div>
   );
 }

@@ -41,9 +41,11 @@ export function createMainWindow(opts: MainWindowOptions): BrowserWindow {
     backgroundColor: colors.background,
     // 无边框窗口加系统窗口按钮（6.3）。Windows 上按钮在右边、颜色跟主题；macOS 上是左边的红绿灯，
     // titleBarOverlay 在那里只用 height（按钮在顶栏里竖直居中）并打开 Window Controls Overlay 的 CSS 变量，
-    // 顶栏据 env(titlebar-area-x) 给红绿灯让出位置（TopBar.tsx）
+    // 主界面和首次启动引导据 env(titlebar-area-x) 给红绿灯让出位置（titlebarChrome.ts）
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: colors.titleBar, symbolColor: colors.titleBarSymbol, height: TITLEBAR_OVERLAY_HEIGHT },
+    titleBarOverlay: process.platform === 'darwin'
+      ? { height: TITLEBAR_OVERLAY_HEIGHT }
+      : { color: colors.titleBar, symbolColor: colors.titleBarSymbol, height: TITLEBAR_OVERLAY_HEIGHT },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // 1.6 第 1 条，一条都不许放宽
@@ -87,6 +89,7 @@ export function createMainWindow(opts: MainWindowOptions): BrowserWindow {
   let timer: NodeJS.Timeout | undefined;
   const save = () => {
     if (win.isDestroyed() || win.isMinimized()) return;
+    if (process.platform === 'darwin' && win.isFullScreen()) return;
     const maximized = win.isMaximized();
     const prev = settings.window;
     if (maximized && prev) {

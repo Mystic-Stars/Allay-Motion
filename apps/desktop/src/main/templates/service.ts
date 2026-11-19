@@ -7,8 +7,7 @@
 // 安装分两段：stage（第 1–3 步，解压到 templates/.staging/<uuid>/）→ 渲染进程试运行（第 4 步）→ commit（第 6 步，改名就位）。
 // 渲染进程交来的只有暂存 ID 和试运行的警告，路径都由主进程决定（1.6 第 6 条）。
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   DeriveError,
@@ -16,17 +15,19 @@ import {
   compareVersionStrings,
   isSafeAssetPath,
   isReservedId,
-  isValidVersion,
   parseManifest,
   type TemplateDiagnostic,
   pickVersion,
   resolveDerived,
   resolveScript,
   sanitizeParams,
+  studioMaterialRefs,
   type ResolvedTemplate,
   type TemplateManifest,
 } from '@allay/template-sdk';
 import { z } from 'zod';
+import type { SourceReadResult, WriteResult } from '@allay/host-api';
+import { MAX_SOURCE_MANIFEST_BYTES, type FreezeCompositionRequest, type WriteSourceRequest } from '../../shared/template-authoring';
 import {
   InstallReportSchema,
   type CommitResult,
@@ -42,6 +43,13 @@ import type { Logger } from '../logger';
 import { writeJsonAtomic } from '../settings-store';
 import { PackageError, readPackage } from './package-reader';
 import { writeZip } from './zip-writer';
+import { ensureTemplateParent, readRegular, readSourceFiles, replaceSourceFiles, safeTemplateDir, validateSource } from './source-files';
+import { CompositionLibrary, freezeComposition } from './composition-package';
+
+const removedBuiltinIds = new Set([
+  'allay.builtin.furnace-smelt', 'allay.builtin.single-chest',
+  studioMaterialRefs.object.id, studioMaterialRefs.player.id,
+]);
 
 /** 暂存的包多久没提交就作废 */
 const STAGING_TTL_MS = 10 * 60 * 1000;
@@ -87,8 +95,10 @@ const passthrough: TemplateWriteGuard = (_id, _version, fn) => fn();
 export class TemplateService {
   private readonly templates = new Map<string, Stored>();
   private readonly staged = new Map<string, Staged>();
+  private readonly editable = new Set<string>();
   private readonly userDir: string;
   private readonly stagingDir: string;
+  readonly compositionLibrary: CompositionLibrary;
   private readonly now: () => number;
   /** 写操作串行：安装、删除、派生不交错 */
   private queue: Promise<unknown> = Promise.resolve();
@@ -97,6 +107,7 @@ export class TemplateService {
   constructor(private readonly opts: TemplateServiceOptions) {
     this.userDir = join(opts.userDataDir, 'templates');
     this.stagingDir = join(this.userDir, '.staging');
+    this.compositionLibrary = new CompositionLibrary(join(opts.userDataDir, 'composition-templates'));
     this.now = opts.now ?? Date.now;
   }
 
@@ -112,6 +123,8 @@ export class TemplateService {
   }
 
   async init(): Promise<void> {
+    await mkdir(this.userDir, { recursive: true });
+    if (!(await lstat(this.userDir)).isDirectory()) throw new Error('invalid template root');
     await rm(this.stagingDir, { recursive: true, force: true });
     await this.loadBuiltins();
     await this.scanUser();
@@ -127,6 +140,10 @@ export class TemplateService {
 
   /** 装载需要的一切；不存在或派生模板的基模板缺失时返回 null */
   async read(id: string, version: string): Promise<TemplateBundle | null> {
+    return this.serial(() => this.readBundle(id, version));
+  }
+
+  private async readBundle(id: string, version: string): Promise<TemplateBundle | null> {
     const s = this.templates.get(key(id, version));
     if (!s) return null;
     const resolved = this.resolve(s.manifest);
@@ -227,9 +244,11 @@ export class TemplateService {
       }
       const { id, version } = st.manifest;
       const dir = this.versionDir(id, version);
+      await ensureTemplateParent(this.userDir, dir);
       await this.guard(id, version, async () => {
+        const info = await lstat(dir).catch(() => null);
+        if (info && !(await safeTemplateDir(this.userDir, id, version))) throw new Error('invalid template directory');
         await rm(dir, { recursive: true, force: true });
-        await mkdir(dirname(dir), { recursive: true });
         await rename(st.dir, dir);
       });
       const warnings = InstallReportSchema.parse(report).warnings;
@@ -244,6 +263,8 @@ export class TemplateService {
       });
       const stored: Stored = { source: 'user', manifest: st.manifest, files: null, dir, trialWarnings: warnings };
       this.templates.set(key(id, version), stored);
+      if (!st.manifest.extends) this.editable.add(key(id, version));
+      else this.editable.delete(key(id, version));
       this.opts.log.info('templates', 'installed', { id, version, warnings });
       return { ok: true, entry: this.entryOf(stored) };
     });
@@ -262,13 +283,16 @@ export class TemplateService {
     return this.serial(async () => {
       const s = this.templates.get(key(id, version));
       if (!s || s.source !== 'user') return false;
+      const dir = await safeTemplateDir(this.userDir, id, version);
+      if (!dir) return false;
       this.templates.delete(key(id, version));
-      await this.guard(id, version, () => rm(this.versionDir(id, version), { recursive: true, force: true }));
+      this.editable.delete(key(id, version));
+      await this.guard(id, version, () => rm(dir, { recursive: true, force: true }));
       await rm(this.metaFile(id, version), { force: true });
       // 这个 id 的最后一个版本：把空目录也删掉
       const idDir = join(this.userDir, id);
       const left = await readdir(idDir).catch(() => []);
-      if (left.length === 0) await rm(idDir, { recursive: true, force: true });
+      if (left.length === 0) await rmdir(idDir).catch(() => undefined);
       this.opts.log.info('templates', 'removed', { id, version });
       return true;
     });
@@ -282,8 +306,10 @@ export class TemplateService {
     if (s.files) {
       for (const [path, data] of [...s.files].sort(([a], [b]) => a.localeCompare(b))) entries.push({ path, data });
     } else {
-      for (const path of await listDir(s.dir!)) {
-        const data = await readInside(s.dir!, path);
+      const dir = await safeTemplateDir(this.userDir, id, version);
+      if (!dir) return null;
+      for (const path of await listDir(dir)) {
+        const data = await readInside(dir, path);
         if (data) entries.push({ path, data });
       }
     }
@@ -332,8 +358,9 @@ export class TemplateService {
       const parsed = parseManifest(raw);
       if (!parsed.ok) return { ok: false, error: parsed.issues.map((i) => `${i.path}: ${i.message}`).join('; ') };
       const dir = this.versionDir(id, '1.0.0');
+      await ensureTemplateParent(this.userDir, dir);
       await this.guard(id, '1.0.0', async () => {
-        await mkdir(dir, { recursive: true });
+        await mkdir(dir);
         if (assets.length > 0) {
           await mkdir(join(dir, 'assets'), { recursive: true });
           for (const a of assets) await writeFile(join(dir, 'assets', a.name), a.bytes);
@@ -348,6 +375,82 @@ export class TemplateService {
   }
 
   // ---- 模板开发模式（docs/08-milestones.md MD）----
+
+  freezeComposition(req: FreezeCompositionRequest) {
+    return this.serial(() => freezeComposition(req, (id, version) => this.readBundle(id, version)));
+  }
+
+  openComposition(id: string) {
+    return this.serial(() => this.compositionLibrary.open(id, (template, version) => this.readBundle(template, version)));
+  }
+
+  readSource(id: string, version: string): Promise<SourceReadResult> {
+    return this.serial(() => this.readEditable(id, version));
+  }
+
+  private async readEditable(id: string, version: string): Promise<SourceReadResult> {
+    if (!this.editable.has(key(id, version))) return { ok: false, error: 'not-user' };
+    try {
+      const dir = await safeTemplateDir(this.userDir, id, version);
+      const files = dir && await readSourceFiles(dir);
+      return files ? { ok: true, ...files } : { ok: false, error: 'io' };
+    } catch {
+      return { ok: false, error: 'io' };
+    }
+  }
+
+  writeSource(id: string, version: string, req: WriteSourceRequest): Promise<WriteResult> {
+    return this.serial(async () => {
+      const current = await this.readEditable(id, version);
+      if (!current.ok) return current;
+      if (current.version !== req.baseVersion) return { ok: false, error: 'conflict', currentVersion: current.version };
+      try {
+        const valid = await validateSource(id, version, req);
+        if (!valid.ok) return { ok: false, error: 'invalid', diagnostics: valid.diagnostics ? [...valid.diagnostics] : [{ kind: 'compile', severity: 'error', code: 'manifest-invalid', message: valid.message }] };
+        const dir = await safeTemplateDir(this.userDir, id, version);
+        if (!dir) return { ok: false, error: 'io' };
+        const result = await this.guard(id, version, () => replaceSourceFiles(dir, req, current, async () => {
+          const latest = await this.readEditable(id, version);
+          return latest.ok ? latest.version : null;
+        }));
+        if (result.ok) {
+          const old = this.templates.get(key(id, version));
+          this.templates.set(key(id, version), { source: 'user', manifest: valid.manifest, files: null, dir, trialWarnings: old?.trialWarnings ?? [] });
+        }
+        return result;
+      } catch {
+        return { ok: false, error: 'io' };
+      }
+    });
+  }
+
+  createBlank(name: string): Promise<TemplateEntry> {
+    return this.serial(async () => {
+      const id = `user.t${randomUUID()}.blank`;
+      const version = '1.0.0';
+      const parsed = parseManifest({ formatVersion: 1, id, version, name, category: 'overlay', params: [] });
+      if (!parsed.ok) throw new Error('invalid blank template manifest');
+      const dir = this.versionDir(id, version);
+      await ensureTemplateParent(this.userDir, dir);
+      const temp = join(dirname(dir), `.${randomUUID()}.tmp`);
+      await this.guard(id, version, async () => {
+        await mkdir(temp);
+        try {
+          await writeFile(join(temp, 'template.js'), 'export default {\n  setup(ctx) {\n    return { duration: 2, update(t) {} };\n  },\n};\n', { flag: 'wx' });
+          await writeFile(join(temp, 'manifest.json'), `${JSON.stringify(parsed.manifest, null, 2)}\n`, { flag: 'wx' });
+          await rename(temp, dir);
+        } finally {
+          await rm(join(temp, 'template.js'), { force: true });
+          await rm(join(temp, 'manifest.json'), { force: true });
+          await rmdir(temp).catch(() => undefined);
+        }
+      });
+      const stored: Stored = { source: 'user', manifest: parsed.manifest, files: null, dir, trialWarnings: [] };
+      this.templates.set(key(id, version), stored);
+      this.editable.add(key(id, version));
+      return this.entryOf(stored);
+    });
+  }
 
   /**
    * 把内置的脚本模板复制成一份可编辑的用户模板（解压后的文件夹）。新的 id 由调用方给（不得以 allay. 开头），
@@ -372,8 +475,9 @@ export class TemplateService {
       const parsed = parseManifest(manifestJson);
       if (!parsed.ok) throw new Error(`copied manifest is invalid: ${parsed.issues.map((i) => `${i.path}: ${i.message}`).join('; ')}`);
       const dir = this.versionDir(target.id, version);
+      await ensureTemplateParent(this.userDir, dir);
       await this.guard(target.id, version, async () => {
-        await mkdir(dir, { recursive: true });
+        await mkdir(dir);
         for (const [path, data] of s.files!) {
           if (path === 'manifest.json') continue;
           const file = join(dir, ...path.split('/'));
@@ -385,6 +489,7 @@ export class TemplateService {
       await writeJsonAtomic(this.metaFile(target.id, version), { formatVersion: 1, installedAt: new Date(this.now()).toISOString(), trialWarnings: [], copiedFrom: source });
       const stored: Stored = { source: 'user', manifest: parsed.manifest, files: null, dir, trialWarnings: [] };
       this.templates.set(key(target.id, version), stored);
+      this.editable.add(key(target.id, version));
       this.opts.log.info('templates', 'copied built-in template', { from: source, id: target.id });
       return { ok: true, entry: this.entryOf(stored) };
     });
@@ -402,6 +507,8 @@ export class TemplateService {
       const stored = await this.loadUserVersion(id, version);
       if (!stored) return null;
       this.templates.set(key(id, version), stored);
+      if (!stored.manifest.extends) this.editable.add(key(id, version));
+      else this.editable.delete(key(id, version));
       return this.entryOf(stored);
     });
   }
@@ -472,7 +579,8 @@ export class TemplateService {
 
   private async readFile(s: Stored, path: string): Promise<Uint8Array | null> {
     if (s.files) return s.files.get(path) ?? null;
-    return readInside(s.dir!, path);
+    const dir = await safeTemplateDir(this.userDir, s.manifest.id, s.manifest.version);
+    return dir ? readInside(dir, path) : null;
   }
 
   private async loadBuiltins(): Promise<void> {
@@ -480,6 +588,7 @@ export class TemplateService {
     for (const name of names.filter((n) => n.endsWith('.allaytpl')).sort()) {
       try {
         const pkg = await readPackage(join(this.opts.builtinDir, name), { builtin: true, appVersion: this.opts.appVersion });
+        if (removedBuiltinIds.has(pkg.manifest.id)) continue;
         this.templates.set(key(pkg.manifest.id, pkg.manifest.version), { source: 'builtin', manifest: pkg.manifest, files: pkg.files, dir: null, trialWarnings: [] });
       } catch (error) {
         this.opts.log.error('templates', 'built-in template rejected', { name, error: error instanceof Error ? error.message : String(error) });
@@ -492,28 +601,35 @@ export class TemplateService {
     const ids = await readdir(this.userDir).catch(() => [] as string[]);
     for (const id of ids) {
       if (!TEMPLATE_ID_RE.test(id)) continue;
+      if (!(await lstat(join(this.userDir, id)).catch(() => null))?.isDirectory()) continue;
       const versions = await readdir(join(this.userDir, id)).catch(() => [] as string[]);
       for (const version of versions) {
         const stored = await this.loadUserVersion(id, version);
-        if (stored) this.templates.set(key(id, version), stored);
+        if (stored) {
+          this.templates.set(key(id, version), stored);
+          if (!stored.manifest.extends) this.editable.add(key(id, version));
+        }
       }
     }
   }
 
   /** 读一个已安装的用户模板（扫描和刷新共用）；不在、不合法时为 null */
   private async loadUserVersion(id: string, version: string): Promise<Stored | null> {
-    const dir = this.versionDir(id, version);
-    if (!TEMPLATE_ID_RE.test(id) || !isValidVersion(version) || !(await stat(dir).catch(() => null))?.isDirectory()) return null;
+    const dir = await safeTemplateDir(this.userDir, id, version);
+    if (!dir) return null;
     try {
-      const parsed = parseManifest(JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')));
+      const manifestBytes = await readRegular(join(dir, 'manifest.json'), MAX_SOURCE_MANIFEST_BYTES);
+      if (!manifestBytes) return null;
+      const parsed = parseManifest(JSON.parse(manifestBytes.toString('utf8').replace(/^\uFEFF/, '')));
       if (!parsed.ok) throw new Error(parsed.issues.map((i) => `${i.path}: ${i.message}`).join('; '));
       const m = parsed.manifest;
       if (m.id !== id || m.version !== version) throw new Error('manifest id/version does not match its folder');
-      if (!m.extends && !existsSync(join(dir, 'template.js'))) throw new Error('template.js is missing');
+      if (!m.extends && !(await lstat(join(dir, 'template.js')).catch(() => null))?.isFile()) throw new Error('template.js is missing');
       if (this.templates.has(key(id, version))) throw new Error('shadows a built-in template');
       let trialWarnings: TrialWarning[] = [];
       try {
-        const meta = MetaSchema.parse(JSON.parse(await readFile(this.metaFile(id, version), 'utf8')));
+        const metaBytes = await readRegular(this.metaFile(id, version), 256 * 1024);
+        const meta = MetaSchema.parse(metaBytes && JSON.parse(metaBytes.toString('utf8')));
         trialWarnings = InstallReportSchema.parse({ warnings: meta.trialWarnings }).warnings;
       } catch {
         // 元数据丢了不影响装载
@@ -530,10 +646,10 @@ export class TemplateService {
 async function readInside(dir: string, rel: string): Promise<Uint8Array | null> {
   const parts = rel.split('/');
   if (parts.some((p) => p === '' || p === '.' || p === '..' || /[\\:]/.test(p))) return null;
-  const file = join(dir, ...parts);
-  const info = await stat(file).catch(() => null);
-  if (!info?.isFile() || info.size > 64 * 1024 * 1024) return null;
-  return new Uint8Array(await readFile(file));
+  for (let depth = 1; depth < parts.length; depth++) {
+    if (!(await lstat(join(dir, ...parts.slice(0, depth))).catch(() => null))?.isDirectory()) return null;
+  }
+  return readRegular(join(dir, ...parts), 64 * 1024 * 1024);
 }
 
 async function listDir(dir: string, prefix = ''): Promise<string[]> {

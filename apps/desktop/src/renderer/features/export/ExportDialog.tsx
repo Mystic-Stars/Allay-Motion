@@ -105,6 +105,7 @@ function SettingsPage({ onClose, onStarted, name, setName }: { onClose(): void; 
   const saved = useProjectStore((s) => s.exportSettings);
   const output = useProjectStore((s) => s.output);
   const template = useProjectStore((s) => s.template);
+  const composition = useProjectStore((s) => s.composition);
   const ready = usePreviewStore((s) => s.status.kind === 'ready');
   const timelineDuration = useTransportStore((s) => s.duration);
   const duration = ready && timelineDuration > 0 ? timelineDuration : null;
@@ -125,12 +126,12 @@ function SettingsPage({ onClose, onStarted, name, setName }: { onClose(): void; 
   const [folder, setFolder] = useState<string | null>(null);
   useEffect(() => void window.allay.export.outputFolder().then(setFolder), []);
 
-  const frames = duration === null ? null : frameCount(duration, output.fps);
+  const frames = composition?.durationFrames ?? (duration === null ? null : frameCount(duration, output.fps));
   const estimate = frames === null ? null : estimateBytes(preset, output.width, output.height, frames);
   const cover = useCoverCheck(saved.quality, saved.shutterAngle);
 
   const presetOk = state(preset) === 'ok';
-  const canStart = presetOk && template !== null && info !== null && info.available;
+  const canStart = presetOk && (composition ? ready && composition.durationFrames > 0 : template !== null) && info !== null && info.available;
 
   const start = async () => {
     setError(null);
@@ -198,7 +199,7 @@ function SettingsPage({ onClose, onStarted, name, setName }: { onClose(): void; 
         <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4" data-testid="export-settings">
           <ResolutionRow />
           <Row label={t('export.fps')}>
-            <Select value={String(output.fps)} onValueChange={(v) => useProjectStore.getState().setOutput({ ...output, fps: Number(v) })}>
+            <Select value={String(composition?.fps ?? output.fps)} disabled={composition !== null} onValueChange={(v) => useProjectStore.getState().setOutput({ ...output, fps: Number(v) })}>
               <SelectTrigger className="w-full" aria-label={t('export.fps')} data-testid="export-fps">
                 <SelectValue>{(v: unknown) => `${String(v)} fps`}</SelectValue>
               </SelectTrigger>
@@ -392,6 +393,9 @@ function KeyColorRow({ value, onChange }: { value: string; onChange(v: string): 
 
 /** 遮盖检查（5.8）：设置变了以后重新检查，旧的检查作废 */
 function useCoverCheck(quality: QualityLevel, shutterAngle: number): CoverResult | 'checking' | null {
+  const { i18n } = useTranslation();
+  const locale = i18n.language;
+  const composition = useProjectStore((s) => s.composition);
   const template = useProjectStore((s) => s.template);
   const params = useProjectStore((s) => s.params);
   const output = useProjectStore((s) => s.output);
@@ -399,14 +403,14 @@ function useCoverCheck(quality: QualityLevel, shutterAngle: number): CoverResult
   const [result, setResult] = useState<CoverResult | 'checking' | null>(null);
   const key = useMemo(() => ({ template, params, output, quality, shutterAngle }), [template, params, output, quality, shutterAngle]);
   useEffect(() => {
-    if (!key.template || !ready) {
+    if (composition || !key.template || !ready) {
       setResult(null);
       return;
     }
     const ctrl = new AbortController();
     setResult('checking');
     const timer = setTimeout(() => {
-      void coverCheck({ template: key.template!, params: key.params, output: key.output, quality: key.quality, shutterAngle: key.shutterAngle }, ctrl.signal).then((r) => {
+      void coverCheck({ template: key.template!, params: key.params, output: key.output, quality: key.quality, shutterAngle: key.shutterAngle, locale }, ctrl.signal).then((r) => {
         if (!ctrl.signal.aborted) setResult(r);
       });
     }, 250);
@@ -414,8 +418,8 @@ function useCoverCheck(quality: QualityLevel, shutterAngle: number): CoverResult
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [key, ready]);
-  return result;
+  }, [composition, key, locale, ready]);
+  return composition ? { kind: 'overlay' } : result;
 }
 
 /**
@@ -425,29 +429,50 @@ function useCoverCheck(quality: QualityLevel, shutterAngle: number): CoverResult
 function SoundsLine() {
   const { t } = useTranslation();
   const cues = usePreviewStore((s) => s.audioCues);
-  const files = useMemo(() => [...new Set(cues.flatMap((c) => (c.variant ? [c.variant.file] : [])))], [cues]);
-  const [remote, setRemote] = useState<string[]>([]);
+  const groups = useMemo(() => {
+    const files = new Map<string | undefined, Set<string>>();
+    for (const cue of cues) {
+      if (!cue.variant) continue;
+      const profile = cue.clip?.profile;
+      let group = files.get(profile);
+      if (!group) files.set(profile, (group = new Set()));
+      group.add(cue.variant.file);
+    }
+    return [...files].flatMap(([profile, group]) => {
+      const entries = [...group];
+      return Array.from({ length: Math.ceil(entries.length / 256) }, (_, index) => ({ profile, files: entries.slice(index * 256, (index + 1) * 256) }));
+    });
+  }, [cues]);
+  const [remote, setRemote] = useState<typeof groups>([]);
   const [state, setState] = useState<'idle' | 'fetching' | 'failed'>('idle');
   useEffect(() => {
     let alive = true;
-    void soundFileStates(files, false).then((st) => alive && setRemote(files.filter((f) => st[f] === 'remote')));
+    void Promise.all(groups.map(async ({ profile, files }) => {
+      const states = await soundFileStates(files, false, profile);
+      return { profile, files: files.filter((file) => states[file] === 'remote') };
+    })).then((result) => { if (alive) setRemote(result.filter((group) => group.files.length > 0)); });
     return () => {
       alive = false;
     };
-  }, [files]);
-  if (remote.length === 0) return null;
+  }, [groups]);
+  const count = remote.reduce((sum, group) => sum + group.files.length, 0);
+  if (count === 0) return null;
   const fetchAll = async () => {
     setState('fetching');
-    const st = await soundFileStates(remote, true);
-    const still = remote.filter((f) => st[f] !== 'local');
-    setRemote(still);
+    const still: typeof groups = [];
+    for (const { profile, files } of remote) {
+      const states = await soundFileStates(files, true, profile);
+      const remaining = files.filter((file) => states[file] !== 'local');
+      if (remaining.length > 0) still.push({ profile, files: remaining });
+    }
+    setRemote((current) => current === remote ? still : current);
     setState(still.length > 0 ? 'failed' : 'idle');
   };
   return (
-    <div className="flex flex-col gap-1.5 rounded-md bg-control px-3 py-2" data-testid="export-sounds-remote" data-count={remote.length}>
+    <div className="flex flex-col gap-1.5 rounded-md bg-control px-3 py-2" data-testid="export-sounds-remote" data-count={count}>
       <span className="flex items-start gap-1.5 text-xs text-fg-muted">
         <CloudArrowDown size={ICON.xs} className="mt-px shrink-0" />
-        {t('export.soundsRemote', { count: remote.length })}
+        {t('export.soundsRemote', { count })}
       </span>
       {state === 'failed' && (
         <span role="alert" className="text-xs text-warning" data-testid="export-sounds-failed">

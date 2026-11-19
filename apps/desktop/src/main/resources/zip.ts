@@ -23,6 +23,7 @@ export class ZipRejectedError extends Error {
 }
 
 export interface ZipIndexOptions {
+  rejectLinks?: boolean;
   maxEntryBytes?: number;
   maxEntries?: number;
   /** 只收录以这些前缀开头的条目（jar 里只关心 assets/ 等）；不给时全收 */
@@ -59,6 +60,9 @@ export async function openZip(file: string, options: ZipIndexOptions = {}): Prom
     if (zip.entryCount > maxEntries) throw new ZipRejectedError(`条目太多（${zip.entryCount} > ${maxEntries}）`);
     for await (const entry of zip.eachEntry()) {
       const raw = entry.fileName;
+      if (options.rejectLinks && ((entry.externalFileAttributes >>> 16) & 0o170000) === 0o120000) {
+        throw new ZipRejectedError('不接受链接条目', raw);
+      }
       const isDir = raw.endsWith('/');
       const name = isDir ? raw.slice(0, -1) : raw;
       if (name === '' && isDir) continue;

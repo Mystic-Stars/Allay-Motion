@@ -100,6 +100,13 @@ const CASES: Record<ParamType, Case> = {
     wrongType: ['sword', 3, null, ''],
     valid: ['minecraft:apple'],
   },
+  font: {
+    def: def({ key: 'font', type: 'font', default: 'minecraft:default' }),
+    expectedDefault: 'minecraft:default',
+    outOfRange: [],
+    wrongType: ['C:/font.ttf', 'file:../font.ttf', 'pack:../font', 'user-font:unknown', 5, null],
+    valid: ['allay:fallback', 'pack:titles/main', `user-font:${'a'.repeat(64)}`],
+  },
   texture: {
     def: def({ key: 'img', type: 'texture', default: '', allowFile: true }),
     expectedDefault: '',
@@ -148,9 +155,8 @@ const CASES: Record<ParamType, Case> = {
 };
 
 describe('T-TPL-2 参数类型的校验与清洗', () => {
-  it('15 种参数类型都有用例', () => {
+  it('每种参数类型都有用例', () => {
     expect(Object.keys(CASES).sort()).toEqual([...PARAM_TYPES].sort());
-    expect(PARAM_TYPES).toHaveLength(15);
   });
 
   for (const [type, c] of Object.entries(CASES)) {

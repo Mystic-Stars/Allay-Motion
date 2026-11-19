@@ -17,12 +17,12 @@
     { "key": "sound", "label": { "zh-CN": "音效", "en": "Sound" }, "collapsed": true }
   ],
   "params": [
-    { "key": "item", "type": "item", "label": { "zh-CN": "物品", "en": "Item" }, "group": "item", "default": "minecraft:diamond_sword" },
+    { "key": "item", "type": "item", "label": { "zh-CN": "物品", "en": "Item" }, "group": "item", "default": "minecraft:diamond_sword", "visibleWhen": { "key": "image", "equals": "" } },
     {
       "key": "image",
       "type": "texture",
       "label": { "zh-CN": "自定义图片", "en": "Custom image" },
-      "hint": { "zh-CN": "选了图片就用它代替物品", "en": "When set, this image replaces the item" },
+      "hint": { "zh-CN": "图片优先；清空图片可重新选物品。找不到图片时用原选物品。", "en": "The image takes priority. Clear it to choose an item again. If the image is missing, the previously selected item is used." },
       "group": "item",
       "default": "",
       "allowFile": true
@@ -97,7 +97,7 @@
     { "key": "outDuration", "type": "duration", "label": { "zh-CN": "退出", "en": "Out" }, "group": "timing", "default": 0.45, "min": 0.15, "max": 2 },
     { "key": "easing", "type": "easing", "label": { "zh-CN": "缓动", "en": "Easing" }, "group": "timing", "default": "cubicInOut" },
     { "key": "sound", "type": "sound", "label": { "zh-CN": "音效", "en": "Sound" }, "hint": { "zh-CN": "在开头播放", "en": "Plays at the start" }, "group": "sound", "default": "allay:whoosh" },
-    { "key": "volume", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "group": "sound", "default": 0.7, "min": 0, "max": 1, "step": 0.01, "ui": "slider" }
+    { "key": "volume", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "group": "sound", "default": 0.7, "min": 0, "max": 1, "step": 0.01, "ui": "slider", "visibleWhen": { "key": "sound", "not": null } }
   ],
   "timeline": {
     "segments": [

@@ -1,5 +1,5 @@
 // pnpm test:engine：M2 的引擎部分（docs/02-engine.md 2.8、03-assets.md）：贴图缺失、动画贴图、方块、物品、文字、精灵、缩略图。
-// 资源来自测试页里的假资源栈（纯色色块，tests/engine/harness/fake-resources.ts），兜底字体用仓库里的方舟像素字体。
+// 资源来自测试页里的假资源栈（tests/engine/harness/fake-resources.ts）。
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -102,12 +102,13 @@ test('文字：资源栈的位图字体（墨水宽度 + 1 像素间距）、阴
   }
 });
 
-test('文字：没有原版层时回退到方舟像素字体（含中文）；哪个字体都没有的字形报警告', async () => {
-  const ok = await call('scenario', 'text', { text: 'A中' }, HD, [0], []);
+test('T-AST-FONT 空资源栈使用系统字体，真正缺字时报警告', async () => {
+  const ok = await call('scenario', 'text', { text: 'A中あ한' }, HD, [0], []);
   expect(ok.warnings).toHaveLength(1);
   const [w, h] = ok.warnings[0]!.replace('text-size:', '').split('x').map(Number);
   expect(w).toBeGreaterThan(100);
-  expect(h).toBeGreaterThan(100);
+  expect(h).toBeGreaterThan(40);
+  expect(h).toBeLessThan(130);
   const missing = await call('scenario', 'text', { text: 'A\u{10FFFD}' }, HD, [0], []);
   expect(missing.warnings.some((m) => m.includes('no glyph') && m.includes('U+10FFFD'))).toBe(true);
 });

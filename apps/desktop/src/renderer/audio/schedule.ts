@@ -9,7 +9,7 @@ export interface CueVoice {
 }
 
 export interface ScheduleOptions {
-  /** 时间轴上的起点（秒）：只调度 at ≥ from 的 cue（5.5“播放从 t 开始就调度所有 at ≥ t 的 cue”） */
+  /** 时间轴起点（秒）：音乐、空间音效及裁切过的 cue 可从中途续播。 */
   from: number;
   /** from 对应的上下文时刻（ctx.currentTime 的刻度） */
   startAt: number;
@@ -20,12 +20,21 @@ export interface ScheduleOptions {
 /** 预览和导出共用的数值规则：变体的系数乘到模板给的值上，再钳制到 Web Audio 接受的范围 */
 export function voiceParams(cue: AudioCue): { gain: number; rate: number; pan: number } {
   const v = cue.variant;
+  const spatial = v?.kind === 'music' ? undefined : cue.spatial;
   const finite = (x: number, d: number) => (Number.isFinite(x) ? x : d);
   return {
-    gain: Math.max(0, finite(cue.gain, 1) * (v?.volume ?? 1)),
+    gain: Math.max(0, finite(cue.gain, 1) * (v?.volume ?? 1) * (spatial?.gain ?? 1)),
     rate: Math.min(16, Math.max(1 / 16, finite(cue.rate, 1) * (v?.pitch ?? 1))),
-    pan: Math.min(1, Math.max(-1, finite(cue.pan, 0))),
+    pan: Math.min(1, Math.max(-1, finite(cue.pan, 0) + (spatial?.pan ?? 0))),
   };
+}
+
+export function cueWindow(cue: AudioCue, bufferDuration: number, rate: number, from: number, until = Infinity) {
+  if (!cue.clip && !cue.spatial && cue.variant?.kind !== 'music' && cue.at < from) return null;
+  const start = Math.max(cue.at, from);
+  const offset = Math.max(0, (cue.clip?.offset ?? 0) + start - cue.at) * rate;
+  const end = Math.min(until, cue.clip?.end ?? Infinity, start + (bufferDuration - offset) / rate);
+  return end > start ? { start, offset, end } : null;
 }
 
 /**
@@ -35,10 +44,10 @@ export function voiceParams(cue: AudioCue): { gain: number; rate: number; pan: n
 export function scheduleCues(ctx: BaseAudioContext, destination: AudioNode, voices: readonly CueVoice[], opts: ScheduleOptions): AudioBufferSourceNode[] {
   const sources: AudioBufferSourceNode[] = [];
   for (const { cue, buffer } of voices) {
-    if (!(cue.at >= opts.from)) continue;
-    if (opts.until !== undefined && cue.at >= opts.until) continue;
     const p = voiceParams(cue);
     if (p.gain <= 0) continue;
+    const window = cueWindow(cue, buffer.duration, p.rate, opts.from, opts.until);
+    if (!window) continue;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = p.rate;
@@ -47,9 +56,9 @@ export function scheduleCues(ctx: BaseAudioContext, destination: AudioNode, voic
     const pan = ctx.createStereoPanner();
     pan.pan.value = p.pan;
     source.connect(gain).connect(pan).connect(destination);
-    const when = opts.startAt + (cue.at - opts.from);
-    source.start(Math.max(0, when));
-    if (opts.until !== undefined) source.stop(Math.max(0, opts.startAt + (opts.until - opts.from)));
+    const when = opts.startAt + (window.start - opts.from);
+    source.start(Math.max(0, when), window.offset);
+    source.stop(opts.startAt + (window.end - opts.from));
     source.onended = () => {
       source.disconnect();
       gain.disconnect();

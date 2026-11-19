@@ -1,0 +1,27 @@
+{
+  "formatVersion": 1,
+  "id": "allay.builtin.studio-object",
+  "version": "1.0.0",
+  "name": { "zh-CN": "素材对象", "en": "Media object" },
+  "description": { "zh-CN": "静态图片、文字、单个方块或纯音频；在合成时间轴上设置片段长度和裁切。", "en": "A still image, text, a single block, or audio only. Set clip length and trim on the composition timeline." },
+  "license": "MIT",
+  "category": "overlay",
+  "tags": ["studio", "image", "text", "block", "audio"],
+  "params": [
+    { "key": "kind", "type": "enum", "label": { "zh-CN": "对象类型", "en": "Object type" }, "default": "text", "options": [
+      { "value": "image", "label": { "zh-CN": "图片", "en": "Image" } },
+      { "value": "text", "label": { "zh-CN": "文字", "en": "Text" } },
+      { "value": "block", "label": { "zh-CN": "方块", "en": "Block" } },
+      { "value": "sound", "label": { "zh-CN": "音频", "en": "Audio" } }
+    ] },
+    { "key": "image", "type": "texture", "allowFile": true, "label": { "zh-CN": "图片", "en": "Image" }, "hint": { "zh-CN": "未选择时不显示；静态对象不会播放贴图动画。", "en": "Nothing is shown until an image is selected. A still image object does not play texture animations." }, "default": "", "visibleWhen": { "key": "kind", "equals": "image" } },
+    { "key": "text", "type": "text", "label": { "zh-CN": "文字", "en": "Text" }, "default": { "zh-CN": "文字", "en": "Text" }, "multiline": true, "maxLength": 500, "visibleWhen": { "key": "kind", "equals": "text" } },
+    { "key": "font", "type": "font", "label": { "zh-CN": "字体", "en": "Font" }, "default": "minecraft:default", "visibleWhen": { "key": "kind", "equals": "text" } },
+    { "key": "textSize", "type": "number", "label": { "zh-CN": "文字大小", "en": "Text size" }, "default": 10, "min": 1, "max": 96, "step": 1, "visibleWhen": { "key": "kind", "equals": "text" } },
+    { "key": "color", "type": "color", "label": { "zh-CN": "文字颜色", "en": "Text color" }, "default": "#ffffff", "visibleWhen": { "key": "kind", "equals": "text" } },
+    { "key": "shadow", "type": "boolean", "label": { "zh-CN": "文字阴影", "en": "Text shadow" }, "default": false, "visibleWhen": { "key": "kind", "equals": "text" } },
+    { "key": "block", "type": "block", "label": { "zh-CN": "方块", "en": "Block" }, "default": "minecraft:stone", "visibleWhen": { "key": "kind", "equals": "block" } },
+    { "key": "sound", "type": "sound", "label": { "zh-CN": "音频", "en": "Audio" }, "hint": { "zh-CN": "从声音库选取或导入。用时间轴的源入点和片段长度裁切。", "en": "Select or import audio in the sound library. Trim using the clip's source in and length." }, "default": null, "visibleWhen": { "key": "kind", "equals": "sound" } },
+    { "key": "gain", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "hint": { "zh-CN": "选择声音后生效；不改变片段的源入点或时长。", "en": "Applies once an audio source is selected; does not change the clip’s source in or length." }, "default": 1, "min": 0, "max": 2, "step": 0.01, "ui": "slider", "visibleWhen": { "key": "kind", "equals": "sound" } }
+  ]
+}

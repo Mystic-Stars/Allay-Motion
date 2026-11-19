@@ -33,14 +33,14 @@
       "Alpha-channel export"
     ],
     "viewerLabel": "Preview",
-    "demoAssets": "The web version uses flat demo colors; the desktop app reads your installed game and resource packs.",
+    "demoAssets": "No game textures are loaded on this page. Missing catalog assets use original placeholders.",
     "pick": "Choose a template",
     "play": "Play",
     "pause": "Pause",
     "scrub": "Time",
     "starting": "Starting the render engine…",
     "noWebgl": "This browser doesn’t support WebGL2, so the live preview can’t run.",
-    "mcAssets": "Block and item textures on this page come from Minecraft {{version}}, © Mojang / Microsoft, and are shown here for demonstration only. The desktop app reads your installed game and resource packs; no game files ship with it.",
+    "mcAssets": "Available game textures on this page are from Minecraft {{version}}, © Mojang / Microsoft. Missing catalog assets use original placeholders. The desktop app reads your authorized game and resource packs.",
     "titleC": "in‑game.",
     "factsLabel": "Highlights",
     "scrollCue": "Scroll down — you’re dragging this page’s playhead"
@@ -147,16 +147,12 @@
   "footer": {
     "disclaimerLabel": "Disclaimer",
     "license": "Code released under the GPL-3.0 license.",
-    "fonts": "Interface fonts IBM Plex Sans, IBM Plex Mono and Noto Sans SC, and the Ark Pixel Font, all under the SIL OFL 1.1.",
-    "fontLicense": "Pixel font license",
     "source": "Source code",
     "noTracking": "This site uses no cookies, analytics or third-party resources.",
     "end": "Fin.",
     "tcOut": "TC out"
   },
   "host": {
-    "demoPackName": "Web demo colors",
-    "demoPackDescription": "Flat colors generated in the page, not game textures",
     "exportTarget": "Web demo: every frame was rendered, but there is no FFmpeg in the browser, so no file was written",
     "mcPackName": "Vanilla {{version}}",
     "mcPackDescription": "Website demo only: from the licensed game, © Mojang / Microsoft"

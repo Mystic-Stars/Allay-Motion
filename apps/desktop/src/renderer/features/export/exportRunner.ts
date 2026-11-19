@@ -3,9 +3,10 @@
 // 取消就终止导出 Worker 并让主进程杀掉 FFmpeg、删除 .partial。
 // 这里只管“跑一次导出”；任务的编号、状态、命令在 exportTasks.ts。
 import { frameCount } from '@allay/engine/frames';
-import type { FrameQuality, OutputSettings, ParamValues } from '@allay/template-sdk';
+import { CompositionFpsSchema, type Composition, type FrameQuality, type OutputSettings, type ParamValues } from '@allay/template-sdk';
 import type { ExportFailure, ExportPreset } from '../../../shared/export';
 import { EngineHost, EngineUnresponsiveError } from '../../engine-host/EngineHost';
+import { compositionResourceStamp, prepareComposition } from '../../engine-host/composition-sources';
 import { createResolver, loadStamp } from '../../engine-host/resource-client';
 import type { TemplateSource } from '../../templates/catalog';
 import i18next from 'i18next';
@@ -18,7 +19,8 @@ export const QUALITY_SUBFRAMES = { draft: 1, standard: 8, high: 16, ultra: 32 } 
 export type QualityLevel = keyof typeof QUALITY_SUBFRAMES;
 
 export interface ExportRequest {
-  template: TemplateSource;
+  template: TemplateSource | null;
+  composition?: Composition | null;
   params: ParamValues;
   output: OutputSettings;
   preset: ExportPreset;
@@ -101,7 +103,11 @@ export function minAlpha(pixels: Uint8Array): number {
 }
 
 export class ExportRun {
+  private readonly req: ExportRequest;
+  private readonly stamp: string;
+  private readonly locale = i18next.language;
   private canceled = false;
+  private readonly abort = new AbortController();
   private resolveCanceled!: () => void;
   /** 取消时兑现：等待闸门时也要能被取消打断 */
   private readonly canceledSignal = new Promise<void>((resolve) => {
@@ -109,18 +115,30 @@ export class ExportRun {
   });
   private host: EngineHost | null = null;
   private jobId: string | null = null;
+  private cleanup: Promise<unknown> | null = null;
 
   constructor(
-    private readonly req: ExportRequest,
+    req: ExportRequest,
     private readonly onProgress: (p: ExportProgress) => void,
-  ) {}
+  ) {
+    this.req = structuredClone(req);
+    this.stamp = this.req.composition ? compositionResourceStamp(this.req.composition) : loadStamp(this.req.template?.assets ?? null);
+  }
 
   /** 用户点了“取消”：终止导出 Worker，主进程杀掉 FFmpeg 并删掉临时文件 */
   async cancel(): Promise<void> {
     this.canceled = true;
+    this.abort.abort();
     this.resolveCanceled();
     this.host?.dispose();
-    if (this.jobId) await window.allay.export.cancel(this.jobId);
+    await this.cancelJob();
+  }
+
+  private cancelJob(): Promise<unknown> | null {
+    if (this.jobId && !this.cleanup) {
+      this.cleanup = window.allay.export.cancel(this.jobId).catch(() => undefined);
+    }
+    return this.cleanup;
   }
 
   async run(): Promise<ExportOutcome> {
@@ -132,19 +150,33 @@ export class ExportRun {
     let frame: number | null = null;
     this.onProgress({ stage: 'preparing', written: 0, total: 0, etaSeconds: null });
     try {
+      const fps = CompositionFpsSchema.parse(req.composition?.fps ?? req.output.fps);
+      const output = { ...req.output, fps };
+      const prepared = req.composition ? await prepareComposition(req.composition, output, this.locale, this.stamp) : null;
+      if (!prepared && !req.template) throw new Error('no template');
+      if (this.canceled) return { kind: 'canceled' };
       // 1. 导出 Worker：每次导出新建，用输出分辨率的离屏画布
-      const assets = req.template.assets;
-      const host = await EngineHost.create({ mode: 'export', resolveResource: createResolver(() => assets), strictDeterminism: import.meta.env.DEV });
+      const assets = req.template?.assets ?? null;
+      const resolveResource = createResolver(assets);
+      const assertCurrent = prepared?.assertCurrent ?? (() => {
+        if (loadStamp(assets) !== this.stamp) throw new Error('resource stack changed during export setup');
+      });
+      assertCurrent();
+      const host = await EngineHost.create({ mode: 'export', resolveResource, strictDeterminism: import.meta.env.DEV });
       this.host = host;
       if (this.canceled) return { kind: 'canceled' };
-      const loaded = await host.load({ manifest: req.template.manifest, code: req.template.code, params: req.params, output: req.output, resourceStamp: loadStamp(assets) });
-      const total = frameCount(loaded.duration, req.output.fps);
-      const cutFrame = loaded.cutTime === null ? null : Math.round(loaded.cutTime * req.output.fps);
+      const loaded = prepared ? await host.loadComposition(prepared.request, prepared.resources)
+        : await host.load({ manifest: req.template!.manifest, code: req.template!.code, params: req.params, output, resourceStamp: this.stamp, locale: this.locale });
+      assertCurrent();
+      const total = prepared?.request.composition.durationFrames ?? frameCount(loaded.duration, fps);
+      const cutFrame = loaded.cutTime === null ? null : Math.round(loaded.cutTime * fps);
 
       // 离线混音（5.5，M6b）：和预览同一段调度代码，变体是导出引擎写进 cue 的（与预览同一个选择）。
       // 四个预设都带音轨。没有能出声的 cue 时不加音轨；缺失或还没取回的音效静音并提示——导出过程中不联网
       if (this.canceled) return { kind: 'canceled' };
-      const mix = await mixOffline(loaded.audioCues, mixFrames(total, req.output.fps), soundBank);
+      const mix = await mixOffline(loaded.audioCues, mixFrames(total, fps), soundBank, this.abort.signal);
+      if (this.canceled) return { kind: 'canceled' };
+      assertCurrent();
       reportMissingSounds(mix.missing);
       if (mix.peakNormalized) notify('info', i18next.t('audio.peakNormalized'));
 
@@ -154,25 +186,22 @@ export class ExportRun {
         preset: req.preset,
         width: req.output.width,
         height: req.output.height,
-        fps: req.output.fps as 24 | 25 | 30 | 50 | 60,
+        fps,
         totalFrames: total,
         cutFrame,
         suggestedName: req.suggestedName,
         audio: mix.wav !== null,
       });
-      if (!start.ok) return 'canceled' in start ? { kind: 'canceled' } : { kind: 'failed', error: start.error, frame: null };
+      if (!start.ok) return this.canceled || 'canceled' in start ? { kind: 'canceled' } : { kind: 'failed', error: start.error, frame: null };
       this.jobId = start.job.jobId;
-      if (this.canceled) {
-        await window.allay.export.cancel(start.job.jobId);
-        return { kind: 'canceled' };
-      }
+      if (this.canceled) return { kind: 'canceled' };
       if (mix.wav) {
         const audio = await window.allay.export.writeAudio(start.job.jobId, mix.wav);
+        if (this.canceled) return { kind: 'canceled' };
         if (!audio.ok) {
           this.jobId = null;
           return { kind: 'failed', error: audio.error, frame: null };
         }
-        if (this.canceled) return { kind: 'canceled' };
       }
 
       // 3. 逐帧握手
@@ -186,6 +215,7 @@ export class ExportRun {
         if (this.canceled) return { kind: 'canceled' };
         if (i === cutFrame && !opaque) cutMinAlpha = minAlpha(pixels);
         const step = await window.allay.export.writeFrame(start.job.jobId, pixels);
+        if (this.canceled) return { kind: 'canceled' };
         if (!step.ok) return { kind: 'failed', error: step.error, frame: i };
         eta.mark(performance.now());
         this.onProgress({ stage: 'rendering', written: i + 1, total, etaSeconds: eta.eta(total - i - 1) });
@@ -199,13 +229,14 @@ export class ExportRun {
       const done = await window.allay.export.finish(start.job.jobId);
       const jobId = start.job.jobId;
       this.jobId = null;
+      if (this.canceled && !done.ok) return { kind: 'canceled' };
       if (!done.ok) return { kind: 'failed', error: done.error, frame: null };
       return {
         kind: 'done',
         jobId,
         path: done.path,
         frames: done.frames,
-        fps: req.output.fps,
+        fps,
         duration: loaded.duration,
         cutFrame,
         cutMinAlpha,
@@ -216,12 +247,13 @@ export class ExportRun {
       };
     } catch (error) {
       if (this.canceled) return { kind: 'canceled' };
-      if (this.jobId) await window.allay.export.cancel(this.jobId).catch(() => undefined);
       const code = error instanceof EngineUnresponsiveError ? 'template-unresponsive' : 'template-failed';
       return { kind: 'failed', error: { code, detail: error instanceof Error ? error.message : String(error) }, frame };
     } finally {
       this.host?.dispose();
       this.host = null;
+      await this.cancelJob();
+      this.jobId = null;
     }
   }
 }
@@ -232,14 +264,14 @@ export type CoverResult = { kind: 'overlay' } | { kind: 'checked'; cutFrame: num
  * 遮盖检查（5.8）：按输出分辨率、所选画质和快门角渲染剪辑点那一帧（直通 alpha），返回最小 alpha。
  * 不到 255 就在对话框里警告，但不阻止导出。叠加层模板没有剪辑点。
  */
-export async function coverCheck(req: Pick<ExportRequest, 'template' | 'params' | 'output' | 'quality' | 'shutterAngle'>, signal: AbortSignal): Promise<CoverResult | null> {
+export async function coverCheck(req: Pick<ExportRequest, 'params' | 'output' | 'quality' | 'shutterAngle'> & { template: TemplateSource; locale: string }, signal: AbortSignal): Promise<CoverResult | null> {
   const assets = req.template.assets;
   const host = await EngineHost.create({ mode: 'export', resolveResource: createResolver(() => assets), strictDeterminism: import.meta.env.DEV });
   const abort = () => host.dispose();
   signal.addEventListener('abort', abort);
   try {
     if (signal.aborted) return null;
-    const loaded = await host.load({ manifest: req.template.manifest, code: req.template.code, params: req.params, output: req.output, resourceStamp: loadStamp(assets) });
+    const loaded = await host.load({ manifest: req.template.manifest, code: req.template.code, params: req.params, output: req.output, resourceStamp: loadStamp(assets), locale: req.locale });
     if (loaded.cutTime === null) return { kind: 'overlay' };
     const cutFrame = Math.round(loaded.cutTime * req.output.fps);
     const pixels = await host.renderFrame(cutFrame, { subframes: QUALITY_SUBFRAMES[req.quality], shutterAngle: req.shutterAngle });

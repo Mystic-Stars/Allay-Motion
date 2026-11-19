@@ -1,6 +1,6 @@
 // 渲染进程里的模板来源：经 window.allay.templates 向主进程要（内置和用户模板走同一条路，AGENTS.md 硬性规则 5），
 // 交给引擎的是“生效 manifest + 源码文本”（派生模板已套上 overrides，代码来自基模板，04-templates.md 4.7）。
-import { effectiveManifest, localize, type LocalizedString, type ParamDef, type TemplateManifest } from '@allay/template-sdk';
+import { effectiveManifest, localize, studioMaterialManifest, type LocalizedString, type ParamDef, type TemplateManifest } from '@allay/template-sdk';
 import type { TemplateBundle } from '../../shared/templates';
 
 /** asset: 引用从哪里读：已安装的模板，或正在试运行的暂存包 */
@@ -38,6 +38,13 @@ export function sourceFromBundle(bundle: TemplateBundle, assets: AssetSource | n
 export async function readTemplate(id: string, version: string): Promise<TemplateSource | null> {
   const bundle = await window.allay.templates.read(id, version);
   return bundle ? sourceFromBundle(bundle) : null;
+}
+
+export type CompositionClipSource = TemplateSource | Omit<TemplateSource, 'code'>;
+
+export async function readCompositionClip(ref: TemplateSource['ref']): Promise<CompositionClipSource | null> {
+  const manifest = studioMaterialManifest(ref);
+  return manifest ? { ref, manifest, params: manifest.params ?? [], hidden: [], assets: null } : readTemplate(ref.id, ref.version);
 }
 
 /** 按界面语言取 manifest 里的多语言文字 */

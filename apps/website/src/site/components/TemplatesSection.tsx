@@ -1,6 +1,6 @@
 // 模板一节：精选展示，不讲数量。一大几小的不等大网格 + “更多模板，持续加入”。
 // 卡片由内置模板的 manifest 推导（名称、说明、分类、默认时长），顺序按 showcaseEntries（偏好在前，新加的排在后面，不用改代码）；
-// 只展示前 SHOWCASE_MAX 个，其余在仿真器的模板库里。
+// 每页保留一大四小的版式，翻页可以查看其余作品。
 // 封面和循环播放的帧来自桌面版模板库同一个封面服务（features/gallery/covers.ts：杂务引擎 Worker，320×180、30 fps）。
 import { AllayLoader } from '@allay/mascot';
 import { buttonVariants } from '@allay/ui/components/button';
@@ -10,6 +10,8 @@ import { ArrowRight, ArrowUpRight, Plus } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Cover } from '../../../../desktop/src/renderer/features/gallery/covers';
+import { GalleryPager } from '../../../../desktop/src/renderer/features/gallery/GalleryPager';
+import { galleryPage } from '../../../../desktop/src/shared/gallery';
 import type { TemplateEntry } from '../../../../desktop/src/shared/templates';
 import { defaultDuration, showcaseEntries } from '../../host/templates';
 import { REPO_URL, SECTION } from '../links';
@@ -29,51 +31,30 @@ const COVER_W = 320;
 const COVER_H = 180;
 const COVER_FPS = 30;
 
-function useCovers(entries: TemplateEntry[], anchor: React.RefObject<HTMLElement | null>): { covers: CoverMap; keyOf: (e: TemplateEntry) => string } {
+function useCovers(entries: TemplateEntry[], visible: boolean) {
   const [covers, setCovers] = useState<CoverMap>({});
   const [keyOf, setKeyOf] = useState<(e: TemplateEntry) => string>(() => () => '');
   useEffect(() => {
-    const el = anchor.current;
-    if (!el) return;
+    if (!visible) return;
     let off: (() => void) | null = null;
+    let release: (() => void) | undefined;
     let alive = true;
-    let started = false;
-    let idle = 0;
-    let timer = 0;
-    const start = () => {
-      if (started) return;
-      started = true;
-      io.disconnect();
-      void (async () => {
+    void (async () => {
         const rt = await import('../engine/runtime');
         await rt.ensureRuntime();
         if (!alive) return;
         setKeyOf(() => (e: TemplateEntry) => rt.coverKey(e.id, e.version));
         setCovers(rt.useCoverStore.getState().covers);
         off = rt.useCoverStore.subscribe((s) => setCovers(s.covers));
-        if (rt.hasWebgl2()) rt.covers.ensure(entries);
+        if (rt.hasWebgl2()) release = rt.covers.ensure(entries);
       })();
-    };
-    // 不等滚到这里：页面空闲下来就开始渲染（杂务 Worker 一个模板一个模板地排队，不和首屏抢）
-    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && start(), { rootMargin: '1200px 0px' });
-    io.observe(el);
-    const onLoad = () => {
-      timer = window.setTimeout(() => {
-        if ('requestIdleCallback' in window) idle = window.requestIdleCallback(start, { timeout: 2500 });
-        else start();
-      }, 800);
-    };
-    if (document.readyState === 'complete') onLoad();
-    else window.addEventListener('load', onLoad, { once: true });
     return () => {
       alive = false;
-      io.disconnect();
-      window.removeEventListener('load', onLoad);
-      window.clearTimeout(timer);
-      if (idle) window.cancelIdleCallback(idle);
       off?.();
+      release?.();
+      setCovers({});
     };
-  }, [entries, anchor]);
+  }, [entries, visible]);
   return { covers, keyOf };
 }
 
@@ -93,7 +74,7 @@ function SheetPlayer({ cover, label }: { cover: Cover; label: string }) {
     let last = -1;
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      if (!visible) return;
+      if (!visible || !sheet.width) return;
       start ||= now;
       const span = cover.frames + Math.round(COVER_FPS * 0.4);
       const f = Math.floor(((now - start) / 1000) * COVER_FPS) % span;
@@ -145,13 +126,26 @@ function CoverBox({ entry, cover, name, live, className }: { entry: TemplateEntr
 
 function Tile({ entry, cover, featured, wideCover = false }: { entry: TemplateEntry; cover: Cover | null | undefined; featured: boolean; wideCover?: boolean }) {
   const { t } = useTranslation();
-  const { language } = usePrefs();
+  const { language, reducedMotion } = usePrefs();
   const m = entry.manifest;
   const name = localize(m.name, language);
   const duration = defaultDuration(m);
   const category = t(`gallery.categories.${m.category}`);
+  const [hover, setHover] = useState(false);
+  const hasCover = Boolean(cover);
+  useEffect(() => {
+    if (!hover || !hasCover || reducedMotion || featured) return;
+    let alive = true;
+    let release: (() => void) | undefined;
+    void import('../engine/runtime').then(async rt => {
+      await rt.ensureRuntime();
+      if (alive && rt.hasWebgl2()) release = rt.covers.animate(entry);
+    });
+    return () => { alive = false; release?.(); };
+  }, [entry, hover, hasCover, reducedMotion, featured]);
   return (
-    <article className="card hoverable group flex h-full flex-col p-2" data-testid="template-card" data-template={entry.id}>
+    <article className="card hoverable group flex h-full flex-col p-2" data-testid="template-card" data-template={entry.id}
+      onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)} onFocus={() => setHover(true)} onBlur={() => setHover(false)}>
       {/* 叠在大格右边的两个小格用扁一点的画面，两列高度对齐（帧网格是 16:9，裁掉上下一点） */}
       <CoverBox entry={entry} cover={cover} name={name} live={featured} className={wideCover ? 'aspect-video lg:aspect-[2/1]' : 'aspect-video'} />
       <div className={`flex flex-1 flex-col justify-end ${featured ? 'px-4 pt-6 pb-4 sm:px-5' : 'px-3 pt-4 pb-3'}`}>
@@ -215,14 +209,16 @@ function MoreTile() {
 
 export function TemplatesSection() {
   const { t } = useTranslation();
-  const shown = useMemo(() => showcaseEntries().slice(0, SHOWCASE_MAX), []);
+  const entries = useMemo(() => showcaseEntries(), []);
+  const [requested, setRequested] = useState(0);
+  const { items: shown, page, pages } = useMemo(() => galleryPage(entries, requested, SHOWCASE_MAX), [entries, requested]);
   const grid = useRef<HTMLDivElement>(null);
   const head = useReveal<HTMLDivElement>();
   const gridReveal = useReveal<HTMLDivElement>(0.08);
-  const { covers, keyOf } = useCovers(shown, grid);
   // 封面在页面空闲时就开始渲染；悦灵（模板库的加载编排）只在这一格进了视口附近、还没渲染完时才出场，
   // 免得远处看不见的加载占着“全页一只”的位置，让首屏的悦灵等它
   const [gridNear, setGridNear] = useState(false);
+  const { covers, keyOf } = useCovers(shown, gridNear);
   useEffect(() => {
     const el = grid.current;
     if (!el) return;
@@ -272,6 +268,7 @@ export function TemplatesSection() {
               <MoreTile />
             </div>
           </div>
+          <GalleryPager page={page} pages={pages} onPage={setRequested} />
         </div>
       </div>
     </section>

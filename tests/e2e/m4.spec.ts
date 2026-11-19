@@ -3,7 +3,9 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { requiredTextures } from '../../packages/assets/src/index';
+import { builtinId, ORIGINAL_BUILTIN_NAMES } from '../fixtures/builtin-template-names';
 import { catalogJarEntries, makeCatalogGame } from '../unit/helpers/resource-fixtures';
+import { catalogIds, catalogNames } from '../fixtures/builtin-catalog';
 import { launchApp, makeUserDataDir, removeUserDataDir, ROOT } from './helpers';
 
 // M4 界面的验收测试（docs/06-ui-design.md 6.10、07-allay-mascot.md 7.10）：T-UI-1 至 T-UI-5、T-UI-7，T-ALY-2、T-ALY-5，
@@ -11,6 +13,9 @@ import { launchApp, makeUserDataDir, removeUserDataDir, ROOT } from './helpers';
 // 窗口不显示、不抢焦点；键盘、鼠标都是 Playwright 经 CDP 发给页面的，不动真实的鼠标键盘。
 
 const FLAGSHIP = 'allay.builtin.block-wipe';
+const builtinGalleryCases = [
+  ...ORIGINAL_BUILTIN_NAMES.map((name) => ({ id: builtinId(name), tab: 'all' })),
+];
 
 interface Ctx {
   app: ElectronApplication;
@@ -19,8 +24,9 @@ interface Ctx {
 }
 
 /** 假原版层（纯色色块，测试数据）；seed 写进 settings.json 的 ui 部分 */
-async function start(ui: Record<string, unknown> = {}, extraEnv: Record<string, string> = {}): Promise<Ctx> {
+async function start(ui: Record<string, unknown> = {}, extraEnv: Record<string, string> = {}, prepare?: (dir: string) => void): Promise<Ctx> {
   const dir = makeUserDataDir();
+  prepare?.(dir);
   const appData = join(dir, 'appdata');
   const paths = requiredTextures().map((r) => ({ id: r.id, path: r.anyOf[0]! }));
   makeCatalogGame(join(appData, '.minecraft'), '9.9.9', '2030-01-01T00:00:00+00:00', catalogJarEntries(paths, {}));
@@ -58,13 +64,83 @@ async function upToDate(page: Page): Promise<void> {
 
 const params = (page: Page) => page.evaluate(() => window.__allayTest!.project().params);
 
-test('T-UI-1 依次选中每个内置模板，改一个参数：预览画布非空，改参数后画面变化', async () => {
+test('T-UI-1 仅原六款与用户模板按页筛选，中英搜索与工作台插入可达', async () => {
+  const target = { id: 'user.test.gallery-page', version: '1.0.0', name: { en: 'Gallery Page Marker', 'zh-CN': '翻页标记' } };
+  const ctx = await start({}, {}, dir => {
+    const fixture = join(dir, 'templates', target.id, target.version);
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, 'manifest.json'), JSON.stringify({
+      ...target, formatVersion: 1, category: 'overlay', extends: { id: builtinId('advancement-toast'), version: '1.0.0' },
+    }));
+  });
+  const { page } = ctx;
+  try {
+    const cards = page.getByTestId('template-list').getByTestId(/^template-/);
+    const cardIds = () => cards.evaluateAll(elements => elements.map(element => element.getAttribute('data-testid')!.slice('template-'.length)).sort());
+    await expect.poll(cardIds).toEqual(ORIGINAL_BUILTIN_NAMES.map(builtinId).sort());
+    await expect(page.getByTestId('gallery-prev')).toBeDisabled();
+    await page.getByTestId('gallery-next').click();
+    const laterIds: string[] = [];
+    for (;;) {
+      laterIds.push(...await cardIds());
+      if (await page.getByTestId('gallery-next').isDisabled()) break;
+      await page.getByTestId('gallery-next').click();
+    }
+    expect(laterIds.sort()).toEqual([target.id]);
+    while (await page.getByTestId('gallery-prev').isEnabled()) await page.getByTestId('gallery-prev').click();
+    await expect.poll(cardIds).toEqual(ORIGINAL_BUILTIN_NAMES.map(builtinId).sort());
+    await page.getByTestId('gallery-tab-overlay').click();
+    const overlayIds: string[] = [];
+    for (;;) {
+      overlayIds.push(...await cardIds());
+      const next = page.getByTestId('gallery-next');
+      if (!await next.isVisible() || await next.isDisabled()) break;
+      await next.click();
+    }
+    const expectedOverlays = [...catalogNames.filter(name =>
+      JSON.parse(readFileSync(join(ROOT, 'packages/templates', name, 'manifest.json'), 'utf8')).category === 'overlay').map(builtinId), target.id];
+    expect(overlayIds.sort()).toEqual(expectedOverlays.sort());
+    expect(overlayIds).toEqual(expect.arrayContaining([builtinId('advancement-toast'), target.id]));
+    await page.getByTestId('gallery-tab-mine').click();
+    await expect.poll(cardIds).toEqual([target.id]);
+    await page.getByTestId('gallery-tab-all').click();
+    await expect(page.getByTestId('gallery-prev')).toBeDisabled();
+    await page.getByTestId('gallery-search-toggle').click();
+    for (const term of [target.name.en.toUpperCase(), target.name['zh-CN']]) {
+      await page.getByTestId('gallery-search').fill(term);
+      await expect.poll(cardIds).toEqual([target.id]);
+    }
+    await page.getByTestId(`template-${target.id}`).click();
+    await upToDate(page);
+    expect((await page.evaluate(() => window.__allayTest!.project())).ref?.id).toBe(target.id);
+    const saved = await page.evaluate(() => window.__allayTest!.savePreset('Gallery test'));
+    expect(saved?.template.id).toBe(target.id);
+    expect(await page.evaluate(id => window.__allayTest!.applyPreset(id), saved!.id)).toBe(true);
+    await page.getByTestId('gallery-search').fill('');
+    await page.getByTestId('project-menu').click();
+    await page.getByTestId('menu-new-animation-from-template').click();
+    await page.getByTestId('confirm-ok').click();
+    const studio = page.getByTestId('studio-template-library');
+    await studio.getByTestId('gallery-tab-all').click();
+    const studioSearch = studio.getByTestId('gallery-search');
+    if (!await studioSearch.isVisible()) await studio.getByTestId('gallery-search-toggle').click();
+    await studioSearch.fill(target.id);
+    await studio.getByTestId(`template-${target.id}`).click();
+    await expect(page.getByTestId('composition-timeline').getByTestId('studio-clip')).toHaveCount(2);
+  } finally {
+    await stop(ctx);
+  }
+});
+
+test('T-UI-1 依次选中原六款，改参数后非空预览发生变化', async () => {
   const ctx = await start();
   const { page } = ctx;
   try {
     const builtins = (await page.evaluate(() => window.__allayTest!.templates())).filter((e) => e.source === 'builtin' && !e.baseMissing);
-    expect(builtins.length).toBeGreaterThan(0);
-    for (const e of builtins) {
+    expect(builtins.map(({ id }) => id).sort()).toEqual(catalogIds);
+    await expect(page.getByTestId('template-list').getByTestId(/^template-/)).toHaveCount(ORIGINAL_BUILTIN_NAMES.length);
+    for (const e of builtinGalleryCases) {
+      await page.getByTestId(`gallery-tab-${e.tab}`).click();
       await page.getByTestId(`template-${e.id}`).click();
       await expect.poll(() => page.evaluate(() => window.__allayTest!.project().ref?.id)).toBe(e.id);
       await upToDate(page);
@@ -163,7 +239,7 @@ async function tabTo(page: Page, match: (el: { testid: string | null; inside: st
   throw new Error('Tab 走不到目标');
 }
 
-test('T-UI-3 只用键盘：选模板、改参数、打开导出对话框、取消；焦点环可见', async () => {
+test('T-UI-3 只用键盘：选模板、改参数、取消导出、搜索工作台模块；焦点环可见', async () => {
   const ctx = await start();
   const { page } = ctx;
   try {
@@ -188,6 +264,19 @@ test('T-UI-3 只用键盘：选模板、改参数、打开导出对话框、取�
     expect(await focusRingVisible(page), '对话框按钮的焦点环').toBe(true);
     await page.keyboard.press('Enter');
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
+
+    const search = page.getByTestId('gallery-search');
+    for (const name of ['loading-screen', 'advancement-toast']) {
+      await page.keyboard.press('Control+KeyF');
+      await expect(search).toBeFocused();
+      await page.keyboard.press('Control+KeyA');
+      await page.keyboard.type(name);
+      const id = builtinId(name);
+      await tabTo(page, (target) => target.testid === `template-${id}`);
+      expect(await focusRingVisible(page), `${id} 的焦点环`).toBe(true);
+      await page.keyboard.press('Enter');
+      await expect.poll(() => page.evaluate(() => window.__allayTest!.project().ref?.id)).toBe(id);
+    }
   } finally {
     await stop(ctx);
   }
@@ -223,14 +312,16 @@ for (const language of ['zh-CN', 'en'] as const) {
         expect(text.match(RAW_KEY)?.[0] ?? null, `${where}：界面上出现了文案键`).toBeNull();
       };
       await check('主界面');
-      // 每个内置模板：卡片有封面、悬停时播放预览，选中后属性面板（各模板用到的参数类型）不溢出
+      // 原六张卡均有封面和悬停预览；基础素材只在工作台的添加菜单中提供。
       await coversReady(page);
-      const builtins = (await page.evaluate(() => window.__allayTest!.templates())).filter((e) => e.source === 'builtin' && !e.baseMissing);
-      for (const e of builtins) {
+      for (const e of builtinGalleryCases) {
+        await page.getByTestId(`gallery-tab-${e.tab}`).click();
         const card = page.getByTestId(`template-${e.id}`);
-        await expect(card.locator('img'), `${e.id} 的封面`).toBeVisible({ timeout: 30_000 });
-        await card.hover();
-        await expect(card.locator('canvas'), `${e.id} 的悬停预览`).toBeVisible();
+        if (e.tab === 'all') {
+          await expect(card.locator('img'), `${e.id} 的封面`).toBeVisible({ timeout: 30_000 });
+          await card.hover();
+          await expect(card.locator('canvas'), `${e.id} 的悬停预览`).toBeVisible({ timeout: 45_000 });
+        }
         await card.click();
         await expect.poll(() => page.evaluate(() => window.__allayTest!.project().ref?.id)).toBe(e.id);
         await upToDate(page);
@@ -240,6 +331,7 @@ for (const language of ['zh-CN', 'en'] as const) {
       }
       await page.mouse.move(0, 0);
       // 后面的方块选择器用 T1 的“方块”参数
+      await page.getByTestId('gallery-tab-all').click();
       await page.getByTestId(`template-${FLAGSHIP}`).click();
       await upToDate(page);
       // 设置对话框的每一页
@@ -283,11 +375,12 @@ for (const theme of ['dark', 'light'] as const) {
     const ctx = await start({ theme, language: 'zh-CN' });
     const { page } = ctx;
     try {
-      // 封面生成完、预览在第 0 帧
-      await expect(page.locator('[data-testid="template-list"] img').first()).toBeVisible({ timeout: 30_000 });
       await page.evaluate(() => window.__allayTest!.setTime(0));
       await upToDate(page);
-      await page.waitForTimeout(500);
+      const covers = page.getByTestId('template-list').locator('img:visible');
+      await expect(covers).toHaveCount(6, { timeout: 30_000 });
+      await covers.evaluateAll(images => Promise.all(images.map(image => (image as HTMLImageElement).decode())));
+      await expect(page.getByTestId('gallery-loader')).toHaveAttribute('data-allay-loader-phase', 'idle');
       // 引擎画出来的东西（预览画布、封面、方块缩略图）随显卡不同，蒙住；悦灵头像会眨眼，也蒙住
       await expect(page).toHaveScreenshot(`ui-${theme}.png`, {
         animations: 'disabled',

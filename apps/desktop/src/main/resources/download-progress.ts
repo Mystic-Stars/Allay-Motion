@@ -5,7 +5,7 @@ import { DownloadProgressSchema } from './download';
 // 折算成五个阶段的状态和整体进度。纯逻辑，时钟可注入，单元测试直接用。
 //
 // - 阶段只往前走：下载器或服务给出更早的阶段时不回退。
-// - 整体进度按字节算：jar、资源索引、音效对象三项的字节数（已缓存的文件算作已收到）。音效的总量要等读到资源索引才知道，
+// - 整体进度按字节算：jar、资源索引、全景、字体和音效对象（已缓存的文件算作已收到）。音效的总量要等读到资源索引才知道，
 //   在那之前分母里放一个估计值；真正的数字比估计小时分数会想往回跳，所以分数只增不减。
 // - 不是字节的几步（清单、读 jar 的条目目录、建立资源栈）各占一小份固定权重，所以字节下完之后还有可见的推进，
 //   完成之前最多到 0.99，完成时才是 1。
@@ -24,16 +24,17 @@ const SPEED_WINDOW_MS = 3000;
 const SPEED_MIN_SPAN_MS = 500;
 const SPEED_STALE_MS = 2000;
 
-type FileKey = 'jar' | 'index' | 'sounds';
+const EXTRACT_FILES = ['index', 'panorama', 'fonts'] as const;
+type FileKey = 'jar' | typeof EXTRACT_FILES[number] | 'sounds';
 
 export class DownloadTracker {
   private stageIdx = 0;
   private readonly status = new Map<DownloadStage, StageStatus>(DOWNLOAD_STAGES.map((s, i) => [s, i === 0 ? 'active' : 'pending']));
-  private readonly got: Record<FileKey, number> = { jar: 0, index: 0, sounds: 0 };
-  private readonly size: Record<FileKey, number | null> = { jar: null, index: null, sounds: null };
+  private readonly got: Record<FileKey, number> = { jar: 0, index: 0, panorama: 0, fonts: 0, sounds: 0 };
+  private readonly size: Record<FileKey, number | null> = { jar: null, index: null, panorama: null, fonts: null, sounds: null };
   private planned = false;
   private versionId: string | null = null;
-  private activity: DownloadActivity = 'manifest';
+  private currentActivity: DownloadActivity = 'manifest';
   private items: { done: number; total: number } | null = null;
   private fraction = 0;
   private completed = false;
@@ -45,6 +46,10 @@ export class DownloadTracker {
 
   get stage(): DownloadStage {
     return DOWNLOAD_STAGES[this.stageIdx]!;
+  }
+
+  get activity(): DownloadActivity {
+    return this.currentActivity;
   }
 
   /** 进入某个阶段（之前的阶段都算完成）；更早的阶段忽略 */
@@ -60,7 +65,7 @@ export class DownloadTracker {
       this.stageIdx = idx;
       this.status.set(stage, 'active');
     }
-    if (activity && idx >= this.stageIdx) this.activity = activity;
+    if (activity && idx >= this.stageIdx) this.currentActivity = activity;
     this.recompute();
   }
 
@@ -69,13 +74,13 @@ export class DownloadTracker {
     const parsed = DownloadProgressSchema.safeParse(raw);
     if (!parsed.success) return false;
     const p = parsed.data;
+    if (p.versionId) this.versionId = p.versionId;
     switch (p.phase) {
       case 'manifest':
         this.enter('manifest', 'manifest');
         break;
       case 'version':
         this.enter('manifest', 'version');
-        if (p.versionId) this.versionId = p.versionId;
         if (p.plan) {
           this.planned = true;
           this.size.jar = p.plan.jarBytes;
@@ -90,6 +95,11 @@ export class DownloadTracker {
       case 'index':
         this.enter('extract', 'index');
         this.bytes('index', p.received, p.total, p.cached === true);
+        break;
+      case 'panorama':
+      case 'fonts':
+        this.enter('extract', p.phase);
+        this.bytes(p.phase, p.received, p.total, p.cached === true);
         break;
       case 'object':
         this.enter('sounds', p.total === null ? 'sounds-list' : 'sounds');
@@ -120,7 +130,7 @@ export class DownloadTracker {
     this.size.sounds ??= this.got.sounds;
     this.items = null;
     this.completed = true;
-    this.activity = 'done';
+    this.currentActivity = 'done';
     this.fraction = 1;
   }
 
@@ -131,11 +141,15 @@ export class DownloadTracker {
 
   private knownTotal(): number | null {
     if (!this.planned) return null;
-    return (this.size.jar ?? 0) + (this.size.index ?? 0) + (this.size.sounds ?? 0);
+    return this.assetBytes() + (this.size.sounds ?? 0);
+  }
+
+  private assetBytes(): number {
+    return (this.size.jar ?? 0) + EXTRACT_FILES.reduce((total, file) => total + (this.size[file] ?? 0), 0);
   }
 
   private received(): number {
-    return this.got.jar + this.got.index + this.got.sounds;
+    return this.got.jar + EXTRACT_FILES.reduce((total, file) => total + this.got[file], 0) + this.got.sounds;
   }
 
   private recompute(): void {
@@ -143,7 +157,7 @@ export class DownloadTracker {
     const soundsIdx = DOWNLOAD_STAGES.indexOf('sounds');
     let byteFrac = 0;
     if (this.planned) {
-      const denom = (this.size.jar ?? 0) + (this.size.index ?? 0) + (this.size.sounds ?? soundsEstimate(this.size.jar ?? 0));
+      const denom = this.assetBytes() + (this.size.sounds ?? soundsEstimate(this.size.jar ?? 0));
       byteFrac = denom > 0 ? Math.min(1, this.received() / denom) : 1;
     }
     const raw = (this.stageIdx > 0 ? W_MANIFEST : 0) + W_BYTES * byteFrac + (this.stageIdx >= soundsIdx ? W_SCAN : 0);
@@ -166,13 +180,17 @@ export class DownloadTracker {
     const speed = this.completed ? null : this.speed();
     let eta: number | null = null;
     if (speed && speed > 0 && this.planned) {
-      const remaining = Math.max(0, (this.size.jar ?? 0) + (this.size.index ?? 0) + (this.size.sounds ?? soundsEstimate(this.size.jar ?? 0)) - received);
+      const remaining = Math.max(0, this.assetBytes() + (this.size.sounds ?? soundsEstimate(this.size.jar ?? 0)) - received);
       eta = remaining / speed;
     }
-    const fileOf: Partial<Record<DownloadStage, FileKey>> = { jar: 'jar', extract: 'index', sounds: 'sounds' };
+    const fileOf: Partial<Record<DownloadStage, FileKey>> = { jar: 'jar', sounds: 'sounds' };
     return {
       stage: this.stage,
       stages: DOWNLOAD_STAGES.map((id) => {
+        if (id === 'extract') return {
+          id, status: this.status.get(id)!, received: EXTRACT_FILES.reduce((total, file) => total + this.got[file], 0),
+          total: EXTRACT_FILES.every((file) => this.size[file] === null) ? null : EXTRACT_FILES.reduce((total, file) => total + (this.size[file] ?? 0), 0),
+        };
         const f = fileOf[id];
         return { id, status: this.status.get(id)!, received: f ? this.got[f] : 0, total: f ? this.size[f] : null };
       }),

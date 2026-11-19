@@ -25,6 +25,7 @@ import { usePreviewStore } from '../stores/previewStore';
 import { isDirty, redo, undo, useProjectStore } from '../stores/projectStore';
 import { useUiStore } from '../stores/uiStore';
 import { commandEnabled, trigger, useMenuGroups, useRegistry, type MenuId, type MenuItemDef } from './registry';
+import { hasNativeMacChrome, titlebarInsets } from './titlebarChrome';
 
 // 顶栏（6.4）：一条 44 px，直接坐在底色上（不是面板）。
 // 左：悦灵头像和字标；菜单“文件 / 编辑 / 视图 / 帮助”（条目来自界面注册表，见 registry.ts、core.tsx）。
@@ -45,6 +46,8 @@ function RegistryMenuItem({ item }: { item: MenuItemDef }) {
   const command = useRegistry((s) => (item.command ? s.commands[item.command] : undefined));
   // 可用条件依赖撤销历史等状态：订阅一下，让菜单打开时是最新的
   useStore(useProjectStore.temporal, (s) => s.pastStates.length + s.futureStates.length);
+  useProjectStore((s) => !!s.template && !s.composition);
+  useUiStore((s) => s.workspaceView);
   const shortcut = useShortcutFor(item.command ?? '');
   if (item.component) return <item.component icon={item.icon} />;
   if (!command) return null;
@@ -65,7 +68,7 @@ function RegistryMenu({ id, titleKey, testId }: { id: MenuId; titleKey: string; 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" className="app-no-drag h-7 px-2.5" data-testid={testId} />}>{t(titleKey)}</DropdownMenuTrigger>
-      <DropdownMenuContent className="w-60">
+      <DropdownMenuContent className={id === 'file' ? 'w-72' : 'w-60'}>
         {groups.map((group, i) => (
           <Fragment key={group[0]!.id}>
             {i > 0 && <DropdownMenuSeparator />}
@@ -131,12 +134,7 @@ export function TopBar() {
     <header
       data-testid="topbar"
       className="app-drag relative flex h-topbar shrink-0 items-center gap-1 bg-background"
-      style={{
-        // 系统窗口按钮（title bar overlay）占用的宽度：Windows 在右边；macOS 的红绿灯在左边（titlebar-area-x），
-        // Windows 上 titlebar-area-x 是 0，左边距就是原来的 8px
-        paddingLeft: 'calc(env(titlebar-area-x, 0px) + 8px)',
-        paddingRight: 'calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 6px)',
-      }}
+      style={titlebarInsets()}
     >
       {/* 正中：工程名与“已修改”（不接收指针，不挡拖动区） */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex h-topbar items-center justify-center gap-2">
@@ -154,11 +152,13 @@ export function TopBar() {
         <AllayHead size={22} className="app-no-drag" onClick={() => undefined} label={t('brand.name')} />
         <span className="text-[13px] font-semibold whitespace-nowrap">{t('brand.wordmark')}</span>
       </div>
-      <nav className="relative flex items-center" aria-label={t('menu.file')}>
-        {MENUS.map((m) => (
-          <RegistryMenu key={m.id} id={m.id} titleKey={m.titleKey} testId={m.testId} />
-        ))}
-      </nav>
+      {!hasNativeMacChrome() && (
+        <nav className="relative flex items-center" aria-label={t('menu.file')}>
+          {MENUS.map((menu) => (
+            <RegistryMenu key={menu.id} id={menu.id} titleKey={menu.titleKey} testId={menu.testId} />
+          ))}
+        </nav>
+      )}
 
       <div data-testid="drag-region" className="h-full min-w-4 flex-1" />
 

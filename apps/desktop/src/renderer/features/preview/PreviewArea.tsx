@@ -202,6 +202,9 @@ export function PreviewArea() {
   const debugLoading = useDebugLoading();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const template = useProjectStore((s) => s.template);
+  const usesPlaceholder = usePreviewStore(s => Boolean(s.loaded?.resourceNotices?.includes('catalog-placeholder') || s.loaded?.clipResourceNotices?.some(clip => clip.notices.includes('catalog-placeholder'))));
+  const composition = useProjectStore(s => Boolean(s.composition));
+  const compactSourceHint = composition || template?.ref.id.startsWith('user.');
   const templateName = template ? localize(template.manifest.name, i18n.language) : null;
   // 适应窗口时的实际缩放比例（画布 CSS 宽度 × 设备像素比 / 输出宽度）
   const zoomPct = size.width > 0 ? Math.round(((size.width * (window.devicePixelRatio || 1)) / output.width) * 100) : null;
@@ -283,6 +286,7 @@ export function PreviewArea() {
         <>
           <b className="text-base font-semibold">{t('preview.title')}</b>
           {templateName && <span className="truncate text-fg-subtle">{templateName}</span>}
+          {usesPlaceholder && <span className="truncate text-xs text-fg-subtle" data-testid="catalog-placeholder" title={t('resources.materialSource')}>{t('resources.catalogPlaceholder')}</span>}
         </>
       }
       info={
@@ -303,7 +307,7 @@ export function PreviewArea() {
           ) : null}
         </AllayLoader>
       </div>
-      {onboarding && !failed && <ResourceOnboarding />}
+      {onboarding && !failed && !compactSourceHint && <ResourceOnboarding />}
       <ErrorCard />
       <DevOverlay />
     </PreviewViewport>

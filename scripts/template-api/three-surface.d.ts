@@ -184,6 +184,7 @@ export declare namespace THREE {
     userData: Record<string, unknown>;
     add(...object: Object3D[]): this;
     remove(...object: Object3D[]): this;
+    removeFromParent(): this;
     clear(): this;
     traverse(callback: (object: Object3D) => unknown): void;
     lookAt(x: number, y: number, z: number): void;
@@ -241,14 +242,20 @@ export declare namespace THREE {
     getY(index: number): number;
     getZ(index: number): number;
     getW(index: number): number;
+    setXY(index: number, x: number, y: number): this;
     setXYZ(index: number, x: number, y: number, z: number): this;
   }
+
+  const Float32BufferAttribute: {
+    new (array: Iterable<number> | ArrayLike<number> | ArrayBuffer | number, itemSize: number, normalized?: boolean): BufferAttribute;
+  };
 
   class BufferGeometry {
     constructor();
     readonly isBufferGeometry: boolean;
     groups: Array<{ start: number; count: number; materialIndex?: number | undefined }>;
     getAttribute(name: string): BufferAttribute | undefined;
+    setAttribute(name: string, attribute: BufferAttribute): this;
     getIndex(): BufferAttribute | null;
     translate(x: number, y: number, z: number): this;
     scale(x: number, y: number, z: number): this;
@@ -353,6 +360,7 @@ export declare namespace THREE {
     readonly offset: Vector2;
     readonly repeat: Vector2;
     needsUpdate: boolean;
+    clone(): this;
     dispose(): void;
   }
 

@@ -127,7 +127,7 @@ describe('音效（3.8）', () => {
 });
 
 describe('字体提供器（3.9）', () => {
-  it('解析 bitmap、space、reference，跳过 unihex 和 ttf', async () => {
+  it('按顺序解析 bitmap、space、reference、unihex 和 ttf', async () => {
     const fonts: Record<string, string> = {
       'assets/minecraft/font/default.json': JSON.stringify({
         providers: [
@@ -140,8 +140,8 @@ describe('字体提供器（3.9）', () => {
       'assets/minecraft/font/include/space.json': JSON.stringify({ providers: [{ type: 'space', advances: { ' ': 4, '\u200c': 0 } }] }),
     };
     const resolved = await resolveFontProviders('minecraft:default', async (path) => (fonts[path] ? [parseFontJson(fonts[path])] : null));
-    expect(resolved.providers.map((p) => p.type)).toEqual(['space', 'bitmap']);
-    expect(resolved.skipped).toEqual(['unihex', 'ttf']);
+    expect(resolved.providers.map((p) => p.type)).toEqual(['space', 'bitmap', 'unihex', 'ttf']);
+    expect(resolved.skipped).toEqual([]);
     expect(findGlyph(resolved.providers, 'C'.codePointAt(0)!)).toMatchObject({ kind: 'bitmap', file: 'assets/minecraft/textures/font/ascii.png', row: 1, col: 0, rows: 2, cols: 2 });
     expect(findGlyph(resolved.providers, 0x20)).toEqual({ kind: 'space', advance: 4 });
     expect(findGlyph(resolved.providers, 0x4e2d)).toBeNull();

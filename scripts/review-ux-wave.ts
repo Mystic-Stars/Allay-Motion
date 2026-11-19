@@ -137,8 +137,10 @@ const SCENES: Scene[] = [
     act: async (p, { server }) => {
       server.jarMode = 'fail';
       await openSettings(p, 'assets');
-      await p.getByTestId('settings-dialog').getByTestId('vanilla-download').click();
-      await p.getByTestId('settings-dialog').getByTestId('download-error').waitFor();
+      const settings = p.getByTestId('settings-dialog');
+      await settings.getByTestId('resources-download-options').click();
+      await settings.getByTestId('vanilla-download').click();
+      await settings.getByTestId('download-error').waitFor();
       await p.waitForTimeout(400);
     },
   },
@@ -181,7 +183,7 @@ const SCENES: Scene[] = [
     },
   },
   { name: 'settings-about-light-zh', theme: 'light', language: 'zh-CN', fakeGame: true, act: (p) => openSettings(p, 'about') },
-  // ---- 资源栈弹层里的下载进度（紧凑版，6.12）----
+  // ---- 从资源栈弹层进入素材设置，查看下载进度（6.12）----
   {
     name: 'resources-download-dark-zh',
     theme: 'dark',
@@ -189,8 +191,11 @@ const SCENES: Scene[] = [
     act: async (p, { server }) => {
       server.jarMode = 'slow';
       await p.getByTestId('resources-button').click();
-      await p.getByTestId('resources-popover').getByTestId('vanilla-download').click();
-      await p.getByTestId('resources-popover').getByTestId('download-numbers').filter({ hasText: '/s' }).waitFor({ timeout: 15_000 });
+      await p.getByTestId('resources-popover').getByTestId('resources-manage').click();
+      const settings = p.getByTestId('settings-dialog');
+      await settings.getByTestId('resources-download-options').click();
+      await settings.getByTestId('vanilla-download').click();
+      await settings.getByTestId('download-numbers').filter({ hasText: '/s' }).waitFor({ timeout: 15_000 });
       await p.waitForTimeout(2500);
     },
   },

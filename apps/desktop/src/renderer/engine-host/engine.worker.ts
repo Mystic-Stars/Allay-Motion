@@ -12,10 +12,11 @@ const engine = new Engine();
 
 const api: EngineApi = {
   init: (opts, host) => engine.init(opts, host),
-  load: (req) => engine.load(req),
-  setParams: (params) => engine.setParams(params),
+  load: (req, trace) => engine.load(req, trace),
+  setParams: (params, trace) => engine.setParams(params, trace),
   resize: (w, h) => engine.resize(w, h),
   render: (t, quality) => engine.render(t, quality),
+  configureExecutionTrace: (config) => engine.configureExecutionTrace(config),
   // 像素缓冲零拷贝传回（2.3）
   renderFrame: async (index, quality, opaque) => {
     const buf = await engine.renderFrame(index, quality, opaque);

@@ -2,16 +2,22 @@
 // 路径只在主进程：渲染进程拿到的是句柄（打开、保存过的工程）和最近工程的 id。路径的来源只有主进程的对话框
 // 和这里记下的最近工程列表（它本身也只来自对话框选过的路径）。
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join } from 'node:path';
+import { lstat, open, readFile } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join } from 'node:path';
+import type { Composition } from '@allay/template-sdk';
 import {
   MAX_PROJECT_BYTES,
+  MAX_PROJECT_IMAGES,
   MAX_RECENTS,
   PROJECT_FORMAT_VERSION,
+  PROJECT_IMAGE_REF,
+  mapProjectImages,
+  ProjectDataSchema,
   ProjectFileSchema,
   type ProjectData,
   type ProjectOpenResult,
   type ProjectSaveResult,
+  type QuickProjectData,
   type RecentProject,
 } from '../../shared/project';
 import type { FileGrants } from '../file-grants';
@@ -19,9 +25,24 @@ import type { Logger } from '../logger';
 import { writeJsonAtomic } from '../settings-store';
 import { z } from 'zod';
 
-type Json = ProjectData['params'][string];
+type Json = QuickProjectData['params'][string];
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+const ProjectImageTokenSchema = z.uuid();
+const ImageGrantSchema = z.strictObject({ formatVersion: z.literal(1), path: z.string().min(1).max(4096) });
 
-const FILE_REF = /^file:([0-9a-fA-F-]{36})$/;
+function mapCompositionImages(doc: Composition, map: (value: string, clipId: string) => string): Composition {
+  return {
+    ...doc,
+    tracks: doc.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => ({
+        ...clip,
+        params: Object.fromEntries(Object.entries(clip.params).map(([key, value]) => [key, mapProjectImages(value, (ref) => map(ref, clip.id))])),
+      })),
+    })),
+  };
+}
 
 const RecentsFileSchema = z.object({
   formatVersion: z.literal(1),
@@ -38,6 +59,7 @@ export interface ProjectServiceOptions {
 export class ProjectService {
   /** 句柄 → 路径 */
   private readonly handles = new Map<string, string>();
+  private readonly imageTokens = new Map<string, string>();
   private recentsList: { path: string; name: string; at: string }[] = [];
   /** 最近工程的路径 → 这次运行里的 id */
   private readonly recentIds = new Map<string, string>();
@@ -101,10 +123,23 @@ export class ProjectService {
   async openPath(path: string): Promise<ProjectOpenResult> {
     let bytes: Buffer;
     try {
-      const info = await stat(path);
-      if (!info.isFile()) return { ok: false, error: 'missing' };
-      if (info.size > MAX_PROJECT_BYTES) return { ok: false, error: 'too-large' };
-      bytes = await readFile(path);
+      const handle = await open(path, 'r');
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) return { ok: false, error: 'missing' };
+        if (info.size > MAX_PROJECT_BYTES) return { ok: false, error: 'too-large' };
+        const buffer = Buffer.alloc(MAX_PROJECT_BYTES + 1);
+        let size = 0;
+        while (size < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+          if (bytesRead === 0) break;
+          size += bytesRead;
+        }
+        if (size > MAX_PROJECT_BYTES) return { ok: false, error: 'too-large' };
+        bytes = buffer.subarray(0, size);
+      } finally {
+        await handle.close();
+      }
     } catch {
       return { ok: false, error: 'missing' };
     }
@@ -120,32 +155,69 @@ export class ProjectService {
     const parsed = ProjectFileSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, error: 'invalid' };
     const file = parsed.data;
-    const params: Record<string, Json> = { ...file.params };
-    const missingFiles: string[] = [];
-    // files：texture 参数的本机图片。还在的签发新的引用，丢了的回到默认值并提示（1.9）
-    for (const [key, p] of Object.entries(file.files)) {
-      delete params[key];
-      try {
-        const info = await stat(p);
-        if (!info.isFile()) throw new Error('not a file');
-        params[key] = `file:${this.opts.grants.grant(p)}`;
-      } catch {
-        missingFiles.push(key);
-      }
-    }
     const name = basename(path, extname(path));
+    const missingFiles = new Set<string>();
+    const common = { name: file.name || name.slice(0, 120), output: file.output, export: file.export, preview: file.preview, resourceHint: file.resourceHint };
+    let data: ProjectData;
+    if (file.formatVersion === 2) {
+      const declared = new Set(file.files ?? []);
+      const used = new Set<string>();
+      mapCompositionImages(file.composition, (value) => {
+        const ref = PROJECT_IMAGE_REF.exec(value)?.[1];
+        if (ref && declared.has(ref)) used.add(ref);
+        return value;
+      });
+      const available = new Map<string, string>();
+      for (const token of used) {
+        const imagePath = await this.readImageGrant(token);
+        if (!imagePath) continue;
+        const ref = this.opts.grants.grant(imagePath);
+        this.imageTokens.set(ref, token);
+        available.set(token, ref);
+      }
+      const composition = mapCompositionImages(file.composition, (value, clipId) => {
+        const token = PROJECT_IMAGE_REF.exec(value)?.[1];
+        const ref = token && available.get(token);
+        if (ref) return `file:${ref}`;
+        missingFiles.add(clipId);
+        return token ? `unlinked-file:${token}` : value;
+      });
+      data = { ...common, composition };
+    } else {
+      const params: Record<string, Json> = Object.fromEntries(Object.entries(file.params).filter(([, value]) =>
+        typeof value !== 'string' || !PROJECT_IMAGE_REF.test(value)));
+      for (const [key, filePath] of Object.entries(file.files)) {
+        delete params[key];
+        if (await this.isImageFile(filePath)) params[key] = `file:${this.opts.grants.grant(filePath)}`;
+        else missingFiles.add(key);
+      }
+      data = { ...common, template: file.template, params };
+    }
     const handle = this.register(path);
     await this.remember(path);
-    const data: ProjectData = {
-      name: file.name || name,
-      template: file.template,
-      params,
-      output: file.output,
-      export: file.export,
-      preview: file.preview,
-      resourceHint: file.resourceHint,
-    };
-    return { ok: true, handle, name, data, missingFiles };
+    return { ok: true, handle, name, data, missingFiles: [...missingFiles] };
+  }
+
+  private async isImageFile(path: string): Promise<boolean> {
+    if (!isAbsolute(path) || /^(?:[\\/]{2}|[\\/][?.][\\/])/.test(path) || !IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) return false;
+    const info = await lstat(path).catch(() => null);
+    return !!info?.isFile() && info.size <= MAX_IMAGE_BYTES;
+  }
+
+  private imageGrantFile(token: string): string {
+    return join(this.opts.userDataDir, 'project-image-grants', `${ProjectImageTokenSchema.parse(token)}.json`);
+  }
+
+  private async readImageGrant(token: string): Promise<string | null> {
+    try {
+      const file = this.imageGrantFile(token);
+      const info = await lstat(file);
+      if (!info.isFile() || info.size > 32 * 1024) return null;
+      const { path } = ImageGrantSchema.parse(JSON.parse(await readFile(file, 'utf8')));
+      return (await this.isImageFile(path)) ? path : null;
+    } catch {
+      return null;
+    }
   }
 
   openRecent(id: string): Promise<ProjectOpenResult> {
@@ -171,31 +243,42 @@ export class ProjectService {
   /** 写到一个路径（来自主进程的保存对话框或已有句柄） */
   saveTo(path: string, data: ProjectData): Promise<ProjectSaveResult> {
     return this.serial(async () => {
-      const params: Record<string, Json> = {};
-      const files: Record<string, string> = {};
-      for (const [key, value] of Object.entries(data.params)) {
-        const m = typeof value === 'string' ? FILE_REF.exec(value) : null;
-        if (!m) {
-          params[key] = value;
-          continue;
-        }
-        // file: 引用换成本机路径；引用无效（不是这次运行签发的）就不存，打开时回到默认值
-        const p = this.opts.grants.resolve(m[1]!);
-        if (p) files[key] = p;
-      }
-      const file = {
-        formatVersion: PROJECT_FORMAT_VERSION,
-        appVersion: this.opts.appVersion,
-        name: data.name,
-        template: data.template,
-        params,
-        output: data.output,
-        export: data.export,
-        preview: data.preview,
-        files,
-        resourceHint: data.resourceHint,
-      };
       try {
+        const parsed = ProjectDataSchema.parse(data);
+        const imageGrants = new Map<string, { ref: string; path: string }>();
+        let versioned: object;
+        if ('composition' in parsed) {
+          const tokensByRef = new Map<string, string>();
+          const composition = mapCompositionImages(parsed.composition, (value) => {
+            const ref = PROJECT_IMAGE_REF.exec(value)?.[1];
+            if (!ref) return value;
+            const path = this.opts.grants.resolve(ref);
+            if (!path) return `unlinked-file:${ref}`;
+            const token = this.imageTokens.get(ref) ?? tokensByRef.get(ref) ?? randomUUID();
+            tokensByRef.set(ref, token);
+            imageGrants.set(token, { ref, path });
+            return `file:${token}`;
+          });
+          if (imageGrants.size > MAX_PROJECT_IMAGES) return { ok: false, error: 'not-writable' } as const;
+          versioned = { ...parsed, formatVersion: PROJECT_FORMAT_VERSION, composition, files: [...imageGrants.keys()] };
+        } else {
+          const files: Record<string, string> = {};
+          const params = Object.fromEntries(Object.entries(parsed.params).filter(([key, value]) => {
+            const ref = typeof value === 'string' ? PROJECT_IMAGE_REF.exec(value)?.[1] : undefined;
+            if (!ref) return true;
+            const path = this.opts.grants.resolve(ref);
+            if (path) files[key] = path;
+            return false;
+          }));
+          versioned = { ...parsed, formatVersion: 1, params, files };
+        }
+        const file = ProjectFileSchema.parse({ ...versioned, appVersion: this.opts.appVersion });
+        if (Buffer.byteLength(`${JSON.stringify(file, null, 2)}\n`) > MAX_PROJECT_BYTES) return { ok: false, error: 'not-writable' } as const;
+        for (const [token, grant] of imageGrants) {
+          if (this.imageTokens.has(grant.ref)) continue;
+          await writeJsonAtomic(this.imageGrantFile(token), ImageGrantSchema.parse({ formatVersion: 1, path: grant.path }));
+          this.imageTokens.set(grant.ref, token);
+        }
         await writeJsonAtomic(path, file);
       } catch (error) {
         this.opts.log.warn('project', 'save failed', { error });

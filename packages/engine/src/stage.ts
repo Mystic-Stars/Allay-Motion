@@ -4,7 +4,7 @@ import type { StageInfo } from '@allay/template-sdk';
 
 export const STAGE_SHORT_SIDE = 1080;
 
-export function computeStage(output: { width: number; height: number; fps: number }): StageInfo {
+export function computeStage(output: { width: number; height: number; fps: number }, referenceSize?: StageInfo['referenceSize']): StageInfo {
   const short = Math.min(output.width, output.height);
   const k = STAGE_SHORT_SIDE / short;
   return {
@@ -13,6 +13,7 @@ export function computeStage(output: { width: number; height: number; fps: numbe
     aspect: output.width / output.height,
     fps: output.fps,
     pixelScale: short / STAGE_SHORT_SIDE,
+    ...(referenceSize && { referenceSize: Object.freeze({ width: referenceSize.width, height: referenceSize.height }) }),
   };
 }
 

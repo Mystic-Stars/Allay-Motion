@@ -4,28 +4,143 @@
   "version": "1.0.0",
   "name": { "zh-CN": "加载界面", "en": "Loading screen" },
   "description": {
-    "zh-CN": "整屏平铺的压暗方块贴图，中间一行标题、一行副标题和一条进度条，进度条在停留阶段走满。",
-    "en": "A full screen of dimmed block tiles with a title, a subtitle and a progress bar that fills during the hold."
+    "zh-CN": "通用方块加载转场，也可按 Java 版或基岩版的版本和场景选择仿制样式。",
+    "en": "A generic tiled loading transition with optional recreations based on Java or Bedrock versions and scenes."
   },
   "license": "MIT",
   "category": "transition",
   "tags": ["loading", "text", "blocks"],
   "groups": [
+    { "key": "preset", "label": { "zh-CN": "版本与场景", "en": "Version and scene" } },
     { "key": "background", "label": { "zh-CN": "背景", "en": "Background" } },
     { "key": "text", "label": { "zh-CN": "文字", "en": "Text" } },
     { "key": "motion", "label": { "zh-CN": "进出方式", "en": "Transitions" } },
     { "key": "timing", "label": { "zh-CN": "时间", "en": "Timing" } }
   ],
   "params": [
-    { "key": "block", "type": "block", "label": { "zh-CN": "方块", "en": "Block" }, "group": "background", "default": "minecraft:dirt" },
-    { "key": "dim", "type": "number", "label": { "zh-CN": "亮度", "en": "Brightness" }, "hint": { "zh-CN": "贴图颜色乘以这个值", "en": "The tile color is multiplied by this" }, "group": "background", "default": 0.25, "min": 0.05, "max": 1, "step": 0.01, "ui": "slider" },
-    { "key": "tileSize", "type": "number", "label": { "zh-CN": "贴图大小", "en": "Tile size" }, "group": "background", "default": 128, "min": 32, "max": 360, "step": 1 },
-    { "key": "title", "type": "text", "label": { "zh-CN": "标题", "en": "Title" }, "group": "text", "default": { "zh-CN": "正在加载世界", "en": "Loading world" }, "maxLength": 40 },
-    { "key": "subtitle", "type": "text", "label": { "zh-CN": "副标题", "en": "Subtitle" }, "hint": { "zh-CN": "可以留空", "en": "Can be left empty" }, "group": "text", "default": { "zh-CN": "正在生成地形…", "en": "Building terrain…" }, "maxLength": 60 },
-    { "key": "textColor", "type": "color", "label": { "zh-CN": "文字颜色", "en": "Text color" }, "group": "text", "default": "#FFFFFF", "palette": "chat" },
-    { "key": "textScale", "type": "number", "label": { "zh-CN": "字号", "en": "Text scale" }, "hint": { "zh-CN": "一个字体像素对应的设计单位", "en": "Design units per font pixel" }, "group": "text", "default": 5, "min": 2, "max": 12, "step": 0.5, "ui": "slider" },
-    { "key": "showBar", "type": "boolean", "label": { "zh-CN": "显示进度条", "en": "Show progress bar" }, "group": "text", "default": true },
-    { "key": "barColor", "type": "color", "label": { "zh-CN": "进度条颜色", "en": "Bar color" }, "group": "text", "default": "#55FF55", "palette": "chat", "visibleWhen": { "key": "showBar", "equals": true } },
+    {
+      "key": "loadingStyle", "type": "enum", "group": "preset", "default": "generic",
+      "label": { "zh-CN": "加载样式", "en": "Loading style" },
+      "hint": { "zh-CN": "Java 样式使用已启用资源层的贴图，请匹配参考版本。进度由片段时间模拟，不读取游戏。", "en": "Java styles use textures from the active resource stack; match it to the reference version. Progress is simulated from clip time, not read from the game." },
+      "options": [
+        { "value": "generic", "label": { "zh-CN": "通用（原模板）", "en": "Generic (original template)" } },
+        { "value": "javaStartupWhite", "label": { "zh-CN": "Java 1.14–1.15.2 · 启动（白底）", "en": "Java 1.14–1.15.2 · Startup (white)" } },
+        { "value": "javaStartupRed", "label": { "zh-CN": "Java 1.21.1 / 26.3 · 启动（红底）", "en": "Java 1.21.1 / 26.3 · Startup (red)" } },
+        { "value": "javaReloadWhite", "label": { "zh-CN": "Java 1.14–1.15.2 · 重载资源（白底）", "en": "Java 1.14–1.15.2 · Resource reload (white)" } },
+        { "value": "javaReloadRed", "label": { "zh-CN": "Java 1.21.1 / 26.3 · 重载资源（红底）", "en": "Java 1.21.1 / 26.3 · Resource reload (red)" } },
+        { "value": "javaWorldDirt114", "label": { "zh-CN": "Java 1.14.0 · 世界载入（泥土）", "en": "Java 1.14.0 · World loading (dirt)" } },
+        { "value": "javaWorldDirt", "label": { "zh-CN": "Java 1.14.1–1.20.4 · 世界载入（泥土）", "en": "Java 1.14.1–1.20.4 · World loading (dirt)" } },
+        { "value": "javaWorldPanorama", "label": { "zh-CN": "Java 1.21.1 · 世界载入（全景、百分比）", "en": "Java 1.21.1 · World loading (panorama, percent)" } },
+        { "value": "javaWorldBar", "label": { "zh-CN": "Java 1.21.9 · 世界载入（进度条）", "en": "Java 1.21.9 · World loading (bar)" } },
+        { "value": "javaWorld263", "label": { "zh-CN": "Java 26.3 · 世界载入（进度条）", "en": "Java 26.3 · World loading (bar)" } },
+        { "value": "javaTravelDirt", "label": { "zh-CN": "Java 1.14–1.20.4 · 跨维度（泥土）", "en": "Java 1.14–1.20.4 · Dimension travel (dirt)" } },
+        { "value": "javaTravelNether", "label": { "zh-CN": "Java 1.21.1 · 跨维度（经下界）", "en": "Java 1.21.1 · Dimension travel (via Nether)" } },
+        { "value": "javaTravelEnd", "label": { "zh-CN": "Java 1.21.1 · 跨维度（经末地）", "en": "Java 1.21.1 · Dimension travel (via End)" } },
+        { "value": "javaTravelOverworld", "label": { "zh-CN": "Java 1.21.1 · 跨维度（其他路径）", "en": "Java 1.21.1 · Dimension travel (other routes)" } },
+        { "value": "javaTravelNether263", "label": { "zh-CN": "Java 26.3 · 跨维度（经下界）", "en": "Java 26.3 · Dimension travel (via Nether)" } },
+        { "value": "javaTravelEnd263", "label": { "zh-CN": "Java 26.3 · 跨维度（经末地）", "en": "Java 26.3 · Dimension travel (via End)" } },
+        { "value": "javaTravelOverworld263", "label": { "zh-CN": "Java 26.3 · 跨维度（其他路径）", "en": "Java 26.3 · Dimension travel (other routes)" } },
+        { "value": "bedrockStartup", "label": { "zh-CN": "基岩 Windows 26.63 · 灰底启动（参考，待采样）", "en": "Bedrock Windows 26.63 · Gray startup (reference; capture pending)" } },
+        { "value": "bedrockPacks", "label": { "zh-CN": "基岩 26.60 样例 · 世界资源包加载", "en": "Bedrock 26.60 sample · World pack loading" } },
+        { "value": "bedrockWorld", "label": { "zh-CN": "基岩 26.60 样例 · 世界载入", "en": "Bedrock 26.60 sample · World loading" } },
+        { "value": "bedrockTravelNether", "label": { "zh-CN": "基岩 26.60 样例 · 前往下界", "en": "Bedrock 26.60 sample · To the Nether" } },
+        { "value": "bedrockTravelEnd", "label": { "zh-CN": "基岩 26.60 样例 · 前往末地", "en": "Bedrock 26.60 sample · To the End" } },
+        { "value": "bedrockTravelOverworld", "label": { "zh-CN": "基岩 26.60 样例 · 前往主世界", "en": "Bedrock 26.60 sample · To the Overworld" } }
+      ]
+    },
+    {
+      "key": "loadingLanguage", "type": "enum", "group": "preset", "default": "auto", "visibleWhen": { "any": [{ "key": "loadingStyle", "in": ["bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] }, { "all": [{ "key": "loadingStyle", "in": ["javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "vanilla" }] }] },
+      "label": { "zh-CN": "预设文案语言", "en": "Preset text language" },
+      "options": [
+        { "value": "auto", "label": { "zh-CN": "跟随界面语言", "en": "Match interface language" } },
+        { "value": "zh-CN", "label": { "zh-CN": "简体中文", "en": "Simplified Chinese" } },
+        { "value": "en", "label": { "zh-CN": "英语", "en": "English" } }
+      ]
+    },
+    { "key": "animateBackground", "type": "boolean", "group": "background", "default": true, "label": { "zh-CN": "背景动效", "en": "Animate background" }, "visibleWhen": { "any": [{ "key": "loadingStyle", "in": ["javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "all": [{ "key": "loadingStyle", "in": ["bedrockPacks", "bedrockWorld"] }, { "key": "bedrockBackground", "equals": "" }] }] } },
+    { "key": "javaPanoramaSpeed", "type": "number", "group": "background", "default": 1, "min": 0, "max": 4, "step": 0.1, "label": { "zh-CN": "全景转速", "en": "Panorama speed" }, "hint": { "zh-CN": "1 为每秒 2°。", "en": "1 means 2° per second." }, "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelOverworld", "javaTravelOverworld263"] }, { "key": "animateBackground", "equals": true }] } },
+    { "key": "javaMenuBlur", "type": "integer", "group": "background", "default": 5, "min": 0, "max": 10, "label": { "zh-CN": "全景模糊", "en": "Panorama blur" }, "hint": { "zh-CN": "每道滤波的输出像素半径；0 关闭菜单模糊。", "en": "Radius per blur pass in output pixels; 0 disables menu blur." }, "visibleWhen": { "key": "loadingStyle", "in": ["javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelOverworld", "javaTravelOverworld263"] } },
+    { "key": "javaEndStartTick", "type": "integer", "group": "background", "default": 0, "min": 0, "max": 23999, "label": { "zh-CN": "末地起始刻", "en": "End portal start tick" }, "hint": { "zh-CN": "末地投影的世界时钟相位；20 刻为 1 秒。", "en": "World-clock phase for the End projection; 20 ticks per second." }, "visibleWhen": { "key": "loadingStyle", "in": ["javaTravelEnd", "javaTravelEnd263"] } },
+    { "key": "javaDarkSplash", "type": "boolean", "group": "background", "default": false, "label": { "zh-CN": "深色启动背景", "en": "Dark splash background" }, "visibleWhen": { "key": "loadingStyle", "in": ["javaStartupRed", "javaReloadRed"] } },
+    { "key": "bedrockBackground", "type": "texture", "allowFile": true, "default": "", "group": "background", "label": { "zh-CN": "基岩背景 PNG", "en": "Bedrock background PNG" }, "visibleWhen": { "key": "loadingStyle", "in": ["bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] } },
+    { "key": "bedrockTitle", "type": "texture", "allowFile": true, "default": "", "group": "background", "label": { "zh-CN": "基岩标题 PNG", "en": "Bedrock title PNG" }, "visibleWhen": { "key": "loadingStyle", "in": ["bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] } },
+    { "key": "block", "type": "block", "label": { "zh-CN": "方块", "en": "Block" }, "group": "background", "default": "minecraft:dirt", "visibleWhen": { "key": "loadingStyle", "equals": "generic" } },
+    { "key": "dim", "type": "number", "label": { "zh-CN": "亮度", "en": "Brightness" }, "hint": { "zh-CN": "贴图颜色乘以这个值", "en": "The tile color is multiplied by this" }, "group": "background", "default": 0.25, "min": 0.05, "max": 1, "step": 0.01, "ui": "slider", "visibleWhen": { "key": "loadingStyle", "equals": "generic" } },
+    { "key": "tileSize", "type": "number", "label": { "zh-CN": "贴图大小", "en": "Tile size" }, "group": "background", "default": 128, "min": 32, "max": 360, "step": 1, "visibleWhen": { "key": "loadingStyle", "equals": "generic" } },
+    { "key": "title", "type": "text", "label": { "zh-CN": "标题", "en": "Title" }, "group": "text", "default": { "zh-CN": "正在加载世界", "en": "Loading world" }, "maxLength": 40, "visibleWhen": { "key": "loadingStyle", "in": ["generic", "bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] } },
+    { "key": "subtitle", "type": "text", "label": { "zh-CN": "副标题", "en": "Subtitle" }, "group": "text", "default": { "zh-CN": "正在生成地形…", "en": "Building terrain…" }, "maxLength": 60, "visibleWhen": { "key": "loadingStyle", "in": ["generic", "bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] } },
+    {
+      "key": "javaTitleMode", "type": "enum", "group": "text", "default": "vanilla", "label": { "zh-CN": "标题来源", "en": "Title source" },
+      "visibleWhen": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] },
+      "legacyDefault": {
+        "value": "custom", "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] },
+        "nonBlankText": ["title"], "allowBlankText": true, "presetText": { "title": ["Loading world", "正在加载世界"] }
+      },
+      "options": [{ "value": "vanilla", "label": { "zh-CN": "原版", "en": "Vanilla" } }, { "value": "custom", "label": { "zh-CN": "自定义", "en": "Custom" } }]
+    },
+    {
+      "key": "javaTitle", "type": "text", "group": "text", "default": "", "maxLength": 40, "label": { "zh-CN": "标题", "en": "Title" },
+      "hint": { "zh-CN": "按输入显示；留空则不显示。", "en": "Shown as entered. Leave blank to hide it." },
+      "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "custom" }] },
+      "legacyText": [{ "key": "title", "except": ["Loading world", "正在加载世界"], "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] } }]
+    },
+    {
+      "key": "javaSubtitleMode", "type": "enum", "group": "text", "default": "vanilla", "label": { "zh-CN": "副标题来源", "en": "Subtitle source" },
+      "hint": { "zh-CN": "这些原版场景不显示副标题。", "en": "These vanilla scenes do not show a subtitle." },
+      "visibleWhen": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] },
+      "legacyDefault": {
+        "value": "custom", "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] },
+        "nonBlankText": ["subtitle"], "presetText": { "subtitle": ["Building terrain…", "正在生成地形…"] }
+      },
+      "options": [{ "value": "vanilla", "label": { "zh-CN": "原版", "en": "Vanilla" } }, { "value": "custom", "label": { "zh-CN": "自定义", "en": "Custom" } }]
+    },
+    {
+      "key": "javaSubtitle", "type": "text", "group": "text", "default": "", "maxLength": 60, "label": { "zh-CN": "副标题", "en": "Subtitle" },
+      "hint": { "zh-CN": "按输入显示；留空则不显示。", "en": "Shown as entered. Leave blank to hide it." },
+      "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaSubtitleMode", "equals": "custom" }] },
+      "legacyText": [{ "key": "subtitle", "except": ["Building terrain…", "正在生成地形…"], "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] } }]
+    },
+    { "key": "textColor", "type": "color", "label": { "zh-CN": "文字颜色", "en": "Text color" }, "group": "text", "default": "#FFFFFF", "palette": "chat", "hint": { "zh-CN": "用于已显示的文字，不改变字标。", "en": "Applies to displayed text, not logo art." }, "visibleWhen": { "any": [
+      { "key": "loadingStyle", "equals": "generic" },
+      { "all": [{ "key": "loadingStyle", "in": ["javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "vanilla" }] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama"] }, { "key": "showBar", "equals": true }] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "custom" }, { "key": "javaTitle", "not": "" }] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaSubtitleMode", "equals": "custom" }, { "key": "javaSubtitle", "not": "" }] }
+    ] } },
+    { "key": "titleFont", "type": "font", "label": { "zh-CN": "标题字体", "en": "Title font" }, "group": "text", "default": "minecraft:default", "visibleWhen": { "any": [
+      { "key": "loadingStyle", "in": ["generic", "bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "vanilla" }] },
+      { "all": [{ "key": "javaTitleMode", "equals": "custom" }, { "key": "javaTitle", "not": "" }] }
+    ] } },
+    { "key": "subtitleFont", "type": "font", "label": { "zh-CN": "副标题字体", "en": "Subtitle font" }, "group": "text", "default": "minecraft:default", "visibleWhen": { "any": [
+      { "all": [{ "key": "loadingStyle", "in": ["generic", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] }, { "key": "subtitle", "not": "" }] },
+      { "all": [{ "key": "loadingStyle", "equals": "bedrockStartup" }, { "key": "subtitle", "not": "" }, { "key": "subtitle", "not": "Building terrain…" }, { "key": "subtitle", "not": "正在生成地形…" }] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaSubtitleMode", "equals": "custom" }, { "key": "javaSubtitle", "not": "" }] }
+    ] } },
+    { "key": "progressFont", "type": "font", "label": { "zh-CN": "进度字体", "en": "Progress font" }, "group": "text", "default": "minecraft:default", "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "bedrockStartup"] }, { "key": "showBar", "equals": true }] } },
+    { "key": "textScale", "type": "number", "label": { "zh-CN": "字号", "en": "Text scale" }, "hint": { "zh-CN": "用于已显示的文字；版本样式以 5 为参考比例。", "en": "Applies to displayed text; 5 is the reference scale for versioned styles." }, "group": "text", "default": 5, "min": 2, "max": 12, "step": 0.5, "ui": "slider", "visibleWhen": { "any": [
+      { "key": "loadingStyle", "in": ["generic", "bedrockStartup", "bedrockPacks", "bedrockWorld", "bedrockTravelNether", "bedrockTravelEnd", "bedrockTravelOverworld"] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaWorldBar", "javaWorld263", "javaTravelDirt", "javaTravelNether", "javaTravelEnd", "javaTravelOverworld", "javaTravelNether263", "javaTravelEnd263", "javaTravelOverworld263"] }, { "key": "javaTitleMode", "equals": "vanilla" }] },
+      { "all": [{ "key": "loadingStyle", "in": ["javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama"] }, { "key": "showBar", "equals": true }] },
+      { "all": [{ "key": "javaTitleMode", "equals": "custom" }, { "key": "javaTitle", "not": "" }] },
+      { "all": [{ "key": "javaSubtitleMode", "equals": "custom" }, { "key": "javaSubtitle", "not": "" }] }
+    ] } },
+    { "key": "showBar", "type": "boolean", "label": { "zh-CN": "显示进度条或百分比", "en": "Show progress bar or percentage" }, "group": "text", "default": true, "visibleWhen": { "key": "loadingStyle", "in": ["generic", "javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldDirt114", "javaWorldDirt", "javaWorldPanorama", "javaWorldBar", "javaWorld263", "bedrockStartup", "bedrockPacks", "bedrockWorld"] } },
+    { "key": "barColor", "type": "color", "label": { "zh-CN": "通用进度条颜色", "en": "Generic bar color" }, "group": "text", "default": "#55FF55", "palette": "chat", "visibleWhen": { "all": [{ "key": "loadingStyle", "equals": "generic" }, { "key": "showBar", "equals": true }] } },
+    {
+      "key": "javaFillMode", "type": "enum", "group": "text", "default": "vanilla", "label": { "zh-CN": "填充色来源", "en": "Fill color source" },
+      "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldBar", "javaWorld263"] }, { "key": "showBar", "equals": true }] },
+      "legacyDefault": { "value": "custom", "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldBar", "javaWorld263"] }, "nonBlankText": ["javaBarColor", "barColor"], "presetText": { "javaBarColor": ["#00000000"], "barColor": ["#55FF55"] }, "skipPresetText": true },
+      "options": [{ "value": "vanilla", "label": { "zh-CN": "原版", "en": "Vanilla" } }, { "value": "custom", "label": { "zh-CN": "自选", "en": "Custom" } }]
+    },
+    {
+      "key": "javaFillColor", "type": "color", "group": "text", "default": "#00FF00", "alpha": true, "label": { "zh-CN": "填充色", "en": "Fill color" },
+      "visibleWhen": { "all": [{ "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldBar", "javaWorld263"] }, { "key": "showBar", "equals": true }, { "key": "javaFillMode", "equals": "custom" }] },
+      "legacyText": [
+        { "key": "javaBarColor", "except": ["#00000000"], "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldBar", "javaWorld263"] } },
+        { "key": "barColor", "except": ["#55FF55"], "when": { "key": "loadingStyle", "in": ["javaStartupWhite", "javaStartupRed", "javaReloadWhite", "javaReloadRed", "javaWorldBar", "javaWorld263"] } }
+      ]
+    },
     {
       "key": "inStyle",
       "type": "enum",
@@ -50,7 +165,7 @@
         { "value": "dissolve", "label": { "zh-CN": "像素溶解", "en": "Dissolve" } }
       ]
     },
-    { "key": "seed", "type": "seed", "label": { "zh-CN": "随机种子", "en": "Seed" }, "hint": { "zh-CN": "只有像素溶解用到", "en": "Only used by Dissolve" }, "group": "motion", "default": 1 },
+    { "key": "seed", "type": "seed", "label": { "zh-CN": "随机种子", "en": "Seed" }, "hint": { "zh-CN": "只有像素溶解用到", "en": "Only used by Dissolve" }, "group": "motion", "default": 1, "visibleWhen": { "any": [{ "key": "inStyle", "equals": "dissolve" }, { "key": "outStyle", "equals": "dissolve" }] } },
     { "key": "inDuration", "type": "duration", "label": { "zh-CN": "进入", "en": "In" }, "group": "timing", "default": 0.3, "min": 0.1, "max": 2 },
     { "key": "hold", "type": "duration", "label": { "zh-CN": "停留", "en": "Hold" }, "group": "timing", "default": 0.9, "min": 0.2, "max": 5 },
     { "key": "outDuration", "type": "duration", "label": { "zh-CN": "退出", "en": "Out" }, "group": "timing", "default": 0.3, "min": 0.1, "max": 2 },

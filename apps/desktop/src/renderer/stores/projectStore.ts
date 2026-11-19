@@ -1,4 +1,4 @@
-import { sanitizeParams, sameValue, type OutputSettings, type ParamValue, type ParamValues } from '@allay/template-sdk';
+import { CompositionSchema, sanitizeParams, sameValue, type Composition, type OutputSettings, type ParamValue, type ParamValues } from '@allay/template-sdk';
 import { temporal } from 'zundo';
 import { create } from 'zustand';
 import type { ExportPreset } from '../../shared/export';
@@ -53,6 +53,7 @@ export interface ExportSettings {
 interface ProjectState {
   /** 启动时模板列表还没取到，或者没有可用的模板 */
   template: TemplateSource | null;
+  composition: Composition | null;
   params: ParamValues;
   output: OutputSettings;
   exportSettings: ExportSettings;
@@ -71,25 +72,36 @@ interface ProjectState {
   /** 产生当前状态的那次改动（撤销时显示“撤销什么”，H6） */
   origin: UndoOrigin;
   setTemplate(template: TemplateSource, params?: Readonly<Record<string, unknown>>, locale?: string): void;
+  setComposition(doc: Composition | null): void;
   /** 改一部分参数（多余的键丢弃，越界的钳制） */
   setParams(patch: Readonly<Record<string, unknown>>, locale?: string): void;
   setOutput(output: OutputSettings): void;
   setExportSettings(patch: Partial<ExportSettings>): void;
   setFileName(ref: string, name: string): void;
   /** 新建或打开工程：重置名字、句柄，清空撤销历史 */
-  reset(next: { template: TemplateSource; params?: Readonly<Record<string, unknown>>; output?: OutputSettings; exportSettings?: ExportSettings; name: string | null; handle: string | null; locale?: string }): void;
-  markSaved(name: string, handle: string): void;
+  reset(next: { template: TemplateSource | null; composition?: Composition; params?: Readonly<Record<string, unknown>>; output?: OutputSettings; exportSettings?: ExportSettings; name: string | null; handle: string | null; locale?: string }): void;
+  markSaved(name: string, handle: string, revision?: number): void;
 }
 
 export const DEFAULT_OUTPUT: OutputSettings = { width: 1920, height: 1080, fps: 60 };
 export const DEFAULT_EXPORT: ExportSettings = { preset: 'prores4444', quality: 'standard', shutterAngle: 180, key: '#00FF00' };
 
-type Tracked = Pick<ProjectState, 'template' | 'params' | 'origin'>;
+type Tracked = Pick<ProjectState, 'template' | 'params' | 'composition' | 'origin'>;
+
+function tracked(state: ProjectState): Tracked {
+  const { template, params, composition, origin } = state;
+  return { template, params, composition, origin };
+}
+
+function sameTracked(a: Tracked, b: Tracked): boolean {
+  return a.template === b.template && a.params === b.params && a.composition === b.composition;
+}
 
 export const useProjectStore = create<ProjectState>()(
   temporal(
     (set) => ({
       template: null,
+      composition: null,
       params: {},
       output: DEFAULT_OUTPUT,
       exportSettings: DEFAULT_EXPORT,
@@ -101,45 +113,58 @@ export const useProjectStore = create<ProjectState>()(
       fileNames: {},
       origin: UI_ORIGIN,
       setTemplate: (template, params = {}, locale = 'en') =>
-        set((s) => ({
+        set((s) => s.composition ? s : ({
           template,
           params: sanitizeParams(template.params, params, { locale }),
           revision: s.revision + 1,
           structureRevision: s.structureRevision + 1,
           origin: originFor('history.template'),
         })),
+      setComposition: (doc) => set((s) => {
+        if (doc === s.composition) return s;
+        if (doc) CompositionSchema.parse(doc);
+        return {
+          composition: doc,
+          output: doc && doc.fps !== s.output.fps ? { ...s.output, fps: doc.fps } : s.output,
+          revision: s.revision + 1,
+          structureRevision: s.structureRevision + 1,
+          origin: originFor('history.params'),
+        };
+      }),
       setParams: (patch, locale = 'en') =>
         set((s) => {
-          if (!s.template) return {};
+          if (!s.template || s.composition) return s;
           const params = sanitizeParams(s.template.params, { ...s.params, ...patch }, { locale });
           // 值没变就不产生新状态（不记撤销、不重画）
           if (Object.keys(params).every((k) => sameValue(params[k], s.params[k]))) return {};
           return { params, revision: s.revision + 1, origin: originFor('history.params') };
         }),
-      setOutput: (output) => set((s) => ({ output, revision: s.revision + 1, structureRevision: s.structureRevision + 1 })),
+      setOutput: (output) => set((s) => ({ output: s.composition ? { ...output, fps: s.composition.fps } : output, revision: s.revision + 1, structureRevision: s.structureRevision + 1 })),
       setExportSettings: (patch) => set((s) => ({ exportSettings: { ...s.exportSettings, ...patch } })),
       setFileName: (ref, name) => set((s) => ({ fileNames: { ...s.fileNames, [ref]: name } })),
-      reset: ({ template, params = {}, output = DEFAULT_OUTPUT, exportSettings = DEFAULT_EXPORT, name, handle, locale = 'en' }) =>
+      reset: ({ template, composition, params = {}, output = DEFAULT_OUTPUT, exportSettings = DEFAULT_EXPORT, name, handle, locale = 'en' }) =>
         set((s) => {
           const revision = s.revision + 1;
           return {
             template,
-            params: sanitizeParams(template.params, params, { locale }),
-            output,
+            composition: composition ? CompositionSchema.parse(composition) : null,
+            params: template ? sanitizeParams(template.params, params, { locale }) : {},
+            output: composition ? { ...output, fps: composition.fps } : output,
             exportSettings,
             name,
             handle,
             revision,
             structureRevision: s.structureRevision + 1,
             savedRevision: revision,
+            fileNames: {},
             origin: UI_ORIGIN,
           };
         }),
-      markSaved: (name, handle) => set((s) => ({ name, handle, savedRevision: s.revision })),
+      markSaved: (name, handle, revision) => set((s) => ({ name, handle, savedRevision: revision ?? s.revision })),
     }),
     {
-      partialize: (s): Tracked => ({ template: s.template, params: s.params, origin: s.origin }),
-      equality: (a, b) => a.template === b.template && a.params === b.params,
+      partialize: tracked,
+      equality: sameTracked,
       limit: 200,
     },
   ),
@@ -158,7 +183,7 @@ let gestureBefore: Tracked | null = null;
 export function beginGesture(): void {
   if (gestureDepth++ > 0) return;
   const s = useProjectStore.getState();
-  gestureBefore = { template: s.template, params: s.params, origin: s.origin };
+  gestureBefore = tracked(s);
   useProjectStore.temporal.getState().pause();
 }
 
@@ -170,21 +195,22 @@ export function endGesture(): void {
   const before = gestureBefore;
   gestureBefore = null;
   const s = useProjectStore.getState();
-  if (!before || (before.template === s.template && before.params === s.params)) return;
+  if (!before || sameTracked(before, s)) return;
   t.setState((ts) => ({ pastStates: [...ts.pastStates, before].slice(-200), futureStates: [] }));
 }
 
-function afterHistoryJump(prevTemplate: TemplateSource | null): void {
+function afterHistoryJump(prev: Tracked): void {
   useProjectStore.setState((s) => ({
+    output: s.composition && s.composition.fps !== s.output.fps ? { ...s.output, fps: s.composition.fps } : s.output,
     revision: s.revision + 1,
-    structureRevision: s.template !== prevTemplate ? s.structureRevision + 1 : s.structureRevision,
+    structureRevision: s.template !== prev.template || s.composition !== prev.composition ? s.structureRevision + 1 : s.structureRevision,
   }));
 }
 
 export function undo(): void {
   const t = useProjectStore.temporal.getState();
   if (gestureDepth > 0 || t.pastStates.length === 0) return;
-  const prev = useProjectStore.getState().template;
+  const prev = useProjectStore.getState();
   t.undo();
   afterHistoryJump(prev);
 }
@@ -192,12 +218,15 @@ export function undo(): void {
 export function redo(): void {
   const t = useProjectStore.temporal.getState();
   if (gestureDepth > 0 || t.futureStates.length === 0) return;
-  const prev = useProjectStore.getState().template;
+  const prev = useProjectStore.getState();
   t.redo();
   afterHistoryJump(prev);
 }
 
 export function clearHistory(): void {
+  gestureDepth = 0;
+  gestureBefore = null;
+  useProjectStore.temporal.getState().resume();
   useProjectStore.temporal.getState().clear();
 }
 

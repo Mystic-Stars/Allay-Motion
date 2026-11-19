@@ -3,16 +3,17 @@
 // Worker 自己不能读任何东西。解码结果按 resourceStamp 缓存；资源栈一变就清空。
 import { decodePng, type DecodedImage } from '@allay/assets';
 import {
-  DEFAULT_FONT_ID,
-  FALLBACK_FONT_ID,
+  FontRefSchema,
+  normalizeRequestedFont,
   MAX_TEXTURE_SIZE,
-  type BitmapFontPayload,
   type FontPayload,
   type FontProviderPayload,
   type ResourceKind,
   type ResourcePayload,
   type SoundMetaPayload,
 } from '@allay/template-sdk';
+import { SkinPixelsSchema, SkinRefSchema } from '../../shared/skins';
+import { FontBytesSchema, FontProvidersResultSchema } from '../../shared/fonts';
 import { currentStamp, useResourceStore } from '../stores/resourceStore';
 import { assetKey, type AssetSource } from '../templates/catalog';
 
@@ -26,21 +27,22 @@ export function decodeImage(png: Uint8Array): Promise<DecodedImage> {
   return decodePng(png, inflate);
 }
 
-let cacheStamp = '';
 const cache = new Map<string, Promise<ResourcePayload | null>>();
-let fallbackFont: Promise<BitmapFontPayload | null> | null = null;
 
-function checkStamp(): void {
-  const stamp = currentStamp();
-  if (stamp !== cacheStamp) {
-    cacheStamp = stamp;
-    cache.clear();
-  }
+export function profileStamp(profileId?: string): string {
+  if (profileId === undefined) return currentStamp();
+  const profile = useResourceStore.getState().state?.library?.profiles.find((entry) => entry.id === profileId);
+  return `${profileId}:${profile?.stamp || 'missing'}`;
 }
 
 // 资源栈一变就丢掉缓存（引擎那边由 load 时带的新 stamp 清空自己的缓存）
-useResourceStore.subscribe((s, prev) => {
-  if (s.state?.stamp !== prev.state?.stamp) checkStamp();
+useResourceStore.subscribe((state, previous) => {
+  const before = new Map(previous.state?.library?.profiles.map((profile) => [profile.id, profile.stamp]));
+  for (const profile of state.state?.library?.profiles ?? []) if (profile.stamp === before.get(profile.id)) before.delete(profile.id);
+  for (const key of cache.keys()) {
+    const [scope] = JSON.parse(key) as [string | null];
+    if (scope === null ? state.state?.stamp !== previous.state?.stamp : before.has(scope)) cache.delete(key);
+  }
 });
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47];
@@ -76,47 +78,59 @@ async function loadImageTexture(id: string, assets: AssetSource | null): Promise
   return { kind: 'rgba', width: img.width, height: img.height, data: img.data };
 }
 
-async function loadTexture(id: string): Promise<ResourcePayload | null> {
-  const raw = await window.allay.resources.readTexture(id);
+async function loadTexture(id: string, profileId?: string): Promise<ResourcePayload | null> {
+  const raw = await window.allay.resources.readTexture(id, profileId);
   if (!raw) return null;
   const img = await decodeImage(raw.png);
   return { kind: 'rgba', width: img.width, height: img.height, data: img.data, ...(raw.mcmeta !== null ? { mcmeta: raw.mcmeta } : {}) };
 }
 
-async function loadFont(id: string): Promise<FontPayload | null> {
-  const def = await window.allay.resources.fontProviders(id);
-  if (!def) return null;
+async function loadFont(id: string, profileId?: string): Promise<FontPayload | null> {
+  if (!FontRefSchema.safeParse(id).success) return null;
+  const result = FontProvidersResultSchema.safeParse(await window.allay.resources.fontProviders(id, profileId));
+  if (!result.success) return null;
+  const def = result.data;
   const providers: FontProviderPayload[] = [];
   const skipped = [...def.skipped];
+  let budget = 40 * 1024 * 1024;
   for (const p of def.providers) {
     if (p.type === 'space') {
       providers.push(p);
       continue;
     }
-    const png = await window.allay.resources.read(p.file);
+    if (p.type === 'unihex') {
+      providers.push(p);
+      continue;
+    }
+    if (p.type !== 'bitmap') {
+      const bytes = FontBytesSchema.safeParse(await window.allay.resources.read(p.file, profileId).catch(() => null));
+      if (bytes.success && bytes.data.byteLength <= budget) {
+        budget -= bytes.data.byteLength;
+        providers.push({ type: p.type, bytes: bytes.data, size: p.size, oversample: p.oversample, shift: p.shift, skip: p.skip });
+      } else skipped.push(`unavailable(${p.file})`);
+      continue;
+    }
+    const png = await window.allay.resources.read(p.file, profileId);
     if (!png) {
       skipped.push(`missing(${p.file})`);
       continue;
     }
     try {
       const image = await decodeImage(png);
+      if (image.data.byteLength > budget) throw new Error('font exceeds memory budget');
+      budget -= image.data.byteLength;
       providers.push({ type: 'bitmap', ascent: p.ascent, height: p.height, rows: p.rows, image });
     } catch {
       skipped.push(`undecodable(${p.file})`);
     }
   }
-  return { kind: 'font', providers, skipped };
+  return { kind: 'font', providers, skipped: skipped.slice(0, 256) };
 }
 
 /** 音效事件的全部变体（引擎据此给 cue 选定变体，02-engine.md 2.10）；资源栈里没有这个事件时为 null */
-async function loadSoundMeta(id: string): Promise<SoundMetaPayload | null> {
-  const variants = await window.allay.resources.soundVariants(id);
+async function loadSoundMeta(id: string, profileId?: string): Promise<SoundMetaPayload | null> {
+  const variants = await window.allay.resources.soundVariants(id, profileId);
   return variants ? { kind: 'sound', variants } : null;
-}
-
-async function loadFallbackFont(): Promise<BitmapFontPayload | null> {
-  const t = await window.allay.resources.fallbackFont();
-  return t ? { kind: 'bdf', ascent: t.ascent, descent: t.descent, codepoints: t.codepoints, metrics: t.metrics, offsets: t.offsets, bits: t.bits } : null;
 }
 
 /**
@@ -128,56 +142,58 @@ export function resolveResource(kind: ResourceKind, id: string): Promise<Resourc
 }
 
 /** 带模板自带图片的 resolveResource：asset: 从 getAssets() 指的模板读（预览换模板时它跟着变） */
-export function createResolver(getAssets: () => AssetSource | null): (kind: ResourceKind, id: string) => Promise<ResourcePayload | null> {
-  return (kind, id) => resolveWith(kind, id, getAssets());
+export function createResolver(source: AssetSource | null | (() => AssetSource | null), profileId?: string): (kind: ResourceKind, id: string) => Promise<ResourcePayload | null> {
+  return (kind, id) => resolveWith(kind, id, typeof source === 'function' ? source() : source, profileId);
 }
 
 /** 模板文件夹里的图片被改过（模板开发模式的热重载，H9）：丢掉这个模板的 asset: 解码缓存 */
 export function forgetTemplateAssets(assets: AssetSource | null): void {
   const key = assetKey(assets);
   if (!key) return;
-  const prefix = `texture:${key}:`;
-  for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
+  for (const cacheKey of cache.keys()) {
+    const [, , , sourceKey] = JSON.parse(cacheKey) as [string | null, string, ResourceKind, string];
+    if (sourceKey === key) cache.delete(cacheKey);
+  }
 }
 
 /** 交给引擎 load 的分代键：资源栈的 stamp 加上模板（asset: 引用随模板变，引擎据此清空贴图缓存） */
-export function loadStamp(assets: AssetSource | null): string {
+export function loadStamp(assets: AssetSource | null, profileId?: string): string {
   const key = assetKey(assets);
-  return key ? `${currentStamp()}|${key}` : currentStamp();
+  const stamp = profileStamp(profileId);
+  return key ? `${stamp}|${key}` : stamp;
 }
 
-async function resolveWith(kind: ResourceKind, id: string, assets: AssetSource | null): Promise<ResourcePayload | null> {
-  let p: Promise<ResourcePayload | null>;
-  if (kind === 'font' && id === FALLBACK_FONT_ID) {
-    // 兜底字体不随资源栈变
-    fallbackFont ??= loadFallbackFont().catch(() => null);
-    p = fallbackFont;
-  } else {
-    checkStamp();
-    const image = kind === 'texture' && /^(asset|file):/.test(id);
-    // asset: 随模板变，键里带上模板
-    const key = image && id.startsWith('asset:') ? `${kind}:${assetKey(assets)}:${id}` : `${kind}:${id}`;
-    let entry = cache.get(key);
-    if (!entry) {
-      entry = image
-        ? loadImageTexture(id, assets)
-        : kind === 'texture'
-          ? loadTexture(id)
-          : kind === 'font' && id === DEFAULT_FONT_ID
-            ? loadFont(id)
-            : kind === 'sound-meta'
-              ? loadSoundMeta(id)
-              : Promise.resolve(null);
-      // 失败（解码不了等）当作缺失，交给引擎用占位并报警告；不缓存失败
-      entry = entry.catch((error: unknown) => {
-        console.warn(`[resources] ${key} failed: ${error instanceof Error ? error.message : String(error)}`);
-        cache.delete(key);
-        return null;
-      });
-      cache.set(key, entry);
-    }
-    p = entry;
+async function resolveWith(kind: ResourceKind, id: string, assets: AssetSource | null, profileId?: string): Promise<ResourcePayload | null> {
+  if (kind === 'texture' && id.startsWith('skins:')) {
+    if (!SkinRefSchema.safeParse(id).success) return null;
+    const skin = SkinPixelsSchema.safeParse(await window.allay.skins?.read(id));
+    return skin.success ? { kind: 'rgba', ...skin.data } : null;
   }
-  const payload = await p;
+  if (kind === 'font') id = normalizeRequestedFont(id);
+  const image = kind === 'texture' && /^(asset|file):/.test(id);
+  const key = JSON.stringify([profileId ?? null, profileStamp(profileId), kind, image && id.startsWith('asset:') ? assetKey(assets) : '', id]);
+  let entry = cache.get(key);
+  if (!entry) {
+    entry = image
+      ? loadImageTexture(id, assets)
+      : kind === 'texture'
+        ? loadTexture(id, profileId)
+        : kind === 'font'
+          ? loadFont(id, profileId)
+          : kind === 'sound-meta'
+            ? loadSoundMeta(id, profileId)
+            : Promise.resolve(null);
+    entry = entry.catch((error: unknown) => {
+      console.warn(`[resources] ${key} failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (cache.get(key) === entry) cache.delete(key);
+      return null;
+    });
+    cache.set(key, entry);
+    if (kind === 'font') {
+      const keys = [...cache.keys()].filter((cacheKey) => (JSON.parse(cacheKey) as unknown[])[2] === 'font');
+      for (const old of keys.slice(0, Math.max(0, keys.length - 8))) cache.delete(old);
+    }
+  }
+  const payload = await entry;
   return payload ? structuredClone(payload) : null;
 }

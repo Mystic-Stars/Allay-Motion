@@ -313,8 +313,13 @@ test.describe('M6b 音效库', () => {
     const { app, page } = await launchApp(dir, { ALLAY_E2E_MOJANG_ORIGIN: server.origin, ALLAY_E2E_EXPORT_TARGET: out, ALLAY_FFMPEG: requirePinnedFfmpeg() });
     try {
       await waitReady(page);
-      await page.getByTestId('vanilla-download').click();
+      await page.getByTestId('onboarding-manage-assets').click();
+      const settings = page.getByTestId('settings-dialog');
+      await settings.getByTestId('resources-download-options').click();
+      await settings.getByTestId('vanilla-download').click();
       await expect.poll(() => page.evaluate(() => window.__allayTest!.resourceState()!.vanilla.active), { timeout: 20_000 }).toBe('cached');
+      await page.keyboard.press('Escape');
+      await expect(settings).toHaveCount(0);
       // 下载时：sounds.json 和常用事件（放置、破坏）的文件；铁砧、钟不取
       expect(server.requests).toEqual(expect.arrayContaining([objectPath('minecraft/sounds.json'), objectPath('minecraft/sounds/test/place.ogg'), objectPath('minecraft/sounds/test/break.ogg')]));
       expect(server.requests).not.toContain(objectPath('minecraft/sounds/test/anvil.ogg'));

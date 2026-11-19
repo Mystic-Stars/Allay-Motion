@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { crc32, deflateSync, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { decodePng, findBdfGlyph, parseBdf, PngDecodeError } from '../../packages/assets/src/index';
@@ -99,15 +97,5 @@ describe('parseBdf', () => {
     expect([...f.bits]).toEqual([0xe0, 0xc0, 0x40]);
     expect(findBdfGlyph(f.codepoints, 98)).toBe(1);
     expect(findBdfGlyph(f.codepoints, 99)).toBe(-1);
-  });
-
-  it('仓库里的方舟像素字体：覆盖拉丁字母和常用汉字', () => {
-    const file = join(import.meta.dirname, '../../resources/fonts/ark-pixel/ark-pixel-12px-proportional-zh_hans.bdf');
-    const f = parseBdf(readFileSync(file, 'utf8'));
-    expect(f.codepoints.length).toBeGreaterThan(20_000);
-    expect(f.ascent).toBeGreaterThan(0);
-    for (const ch of 'Aa字中文转场，。') expect(findBdfGlyph(f.codepoints, ch.codePointAt(0)!), ch).toBeGreaterThanOrEqual(0);
-    const a = findBdfGlyph(f.codepoints, 65);
-    expect(f.metrics[a * 5]).toBeGreaterThan(0);
   });
 });

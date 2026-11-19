@@ -1,6 +1,6 @@
 // 生产依赖的许可检查（docs/09-compliance.md 9.8）。CI 里运行，遇到不在允许列表里的许可就失败。
 //
-// - 允许：MIT、BSD、ISC、Apache-2.0、0BSD、Zlib、CC0。字体包另外允许 OFL。
+// - 允许：MIT、BSD、ISC、Apache-2.0、0BSD、Zlib、CC0。生产依赖不分发文字字体。
 // - 不允许：GPL、AGPL、SSPL、任何带“禁止某类用途”条款的许可、无法识别的许可。
 // - LGPL 只允许以独立进程调用的 FFmpeg，它不是 npm 依赖，不在这里出现。
 // - 点名禁止 GSAP 和 Theatre.js（9.8）。
@@ -19,14 +19,6 @@ export const ALLOWED_LICENSES = new Set([
   'Zlib',
   'CC0-1.0',
 ]);
-
-/** 只对字体包放行的许可 */
-export const FONT_ONLY_LICENSES = new Set(['OFL-1.1']);
-
-/** 字体包：名字明确是字体的包 */
-export function isFontPackage(name: string): boolean {
-  return /^@fontsource(-variable)?\//.test(name);
-}
 
 /** 无论许可写的是什么都不许用的包 */
 export const BANNED_PACKAGES: { pattern: RegExp; reason: string }[] = [
@@ -84,17 +76,17 @@ export function parseSpdx(input: string): Expr {
 }
 
 export function isLicenseAllowed(license: string, packageName: string): boolean {
+  if (/^@fontsource(?:-variable)?\//.test(packageName)) return false;
   let expr: Expr;
   try {
     expr = parseSpdx(license.trim());
   } catch {
     return false;
   }
-  const font = isFontPackage(packageName);
   const ok = (e: Expr): boolean => {
     switch (e.kind) {
       case 'id':
-        return ALLOWED_LICENSES.has(e.id) || (font && FONT_ONLY_LICENSES.has(e.id));
+        return ALLOWED_LICENSES.has(e.id);
       case 'and':
         return ok(e.left) && ok(e.right);
       case 'or':

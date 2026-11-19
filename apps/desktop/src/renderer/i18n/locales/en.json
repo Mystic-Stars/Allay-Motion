@@ -1,4 +1,36 @@
 {
+  "workspaceNavigation": {
+    "newAnimation": "New animation…",
+    "newAnimationFromTemplate": "Create animation from current template…",
+    "codeEditor": "Code Editor",
+    "authoring": "Authoring Tools",
+    "backToPreview": "Back to Preview",
+    "insertTemplates": "Add clips",
+    "insertHint": "Click a template to add a clip at the playhead.",
+    "insertTemplate": "Add clip: {{name}}",
+    "noUserTemplates": "Import a template from the File menu to add it here.",
+    "insertLimit": "Clip not added: the animation has reached a track, clip, or duration limit.",
+    "track": "Track {{number}}"
+  },
+  "liveCode": {
+    "desktopOnly": "The separate code editor is available in the desktop app only. Use Authoring Tools for composition tools.",
+    "openFailed": "Could not open the code editor.",
+    "loading": "Loading template source…",
+    "selectClip": "Select a clip on the main timeline to view its code.",
+    "noTemplate": "Select a template in the main workspace to view its code.",
+    "unavailable": "The selected template source is unavailable.",
+    "stale": "The editing target changed. Select the clip or template again.",
+    "busy": "Another operation is in progress. Try again when it finishes.",
+    "conflict": "The files changed since you started editing. Your draft was not written.",
+    "saved": "Template saved.",
+    "saveFailed": "Template not saved. Your draft is unchanged.",
+    "invalid": "Validation failed. The preview and your draft are unchanged.",
+    "copied": "Editable copy created.",
+    "copyFailed": "Could not switch to an editable copy. The preview is unchanged.",
+    "sharedTitle": "Save a shared template?",
+    "sharedBody": "This changes the installed template, not just the selected clip. Other clips and projects that reference this template version will use the new code.",
+    "saveShared": "Save shared template"
+  },
   "topbar": {
     "undo": "Undo",
     "redo": "Redo",
@@ -12,16 +44,23 @@
     "import": "Import template…",
     "builtin": "Built-in",
     "user": "Mine",
+    "seconds": "{{value}} s",
+    "defaultDuration": "New template: {{duration}}",
+    "instanceDuration": "Current instance: {{duration}}",
     "baseMissing": "base template missing",
     "nondeterministic": "preview and export may differ",
     "empty": "No templates available.",
     "search": "Search templates",
     "clearSearch": "Clear search",
     "categoriesLabel": "Template categories",
+    "pages": "Template pages",
+    "previous": "Previous page",
+    "next": "Next page",
     "tabs": {
       "all": "All",
       "transition": "Transitions",
       "overlay": "Overlays",
+      "title": "Titles",
       "mine": "Mine"
     },
     "categories": {
@@ -294,6 +333,8 @@
   "resources": {
     "button": "Assets: {{name}}",
     "buttonNone": "Assets: none",
+    "catalogPlaceholder": "Missing assets · original placeholder",
+    "materialSource": "Textures use enabled packs first, then the selected asset version. Missing catalog textures use original placeholders, not game art.",
     "buttonLabel": "Assets and resource stack",
     "title": "Assets",
     "subtitle": "Searched from top to bottom; higher entries win.",
@@ -319,12 +360,40 @@
     },
     "vanillaProblem": "The game files can no longer be found (moved or uninstalled?), so vanilla assets are not used for now.",
     "noVanilla": "Vanilla assets are not in use",
+    "library": {
+      "title": "Asset version library",
+      "description": "Choose a default source without mixing versions. Instance packs apply only to the version you enable them for. Encrypted Bedrock packs aren't supported.",
+      "search": "Search installed, cached or Bedrock sources",
+      "rescan": "Rescan offline",
+      "pinned": "Pinned default",
+      "active": "In use",
+      "missing": "Missing or unreadable",
+      "unpin": "Use automatic default",
+      "use": "Pin as default",
+      "sources": { "local": "Java · installed", "downloaded": "Java · downloaded", "bedrock": "Bedrock · local pack" },
+      "types": { "release": "Release", "snapshot": "Snapshot", "old_alpha": "Alpha", "old_beta": "Beta" },
+      "paths": { "game": "Game or cache folder", "packs": "Resource packs folder", "source": "Source" },
+      "locate": "Show in file manager",
+      "unavailable": "This source or folder isn't available yet.",
+      "instancePacks": "Choose instance resource packs",
+      "noInstancePacks": "No packs found in the authorized folder. Pin this source first to authorize it.",
+      "reconnect": "Reconnect game folder…",
+      "reconnectFile": "Reconnect pack file…",
+      "reconnectFolder": "Reconnect pack folder…",
+      "redownload": "Download this version again",
+      "fetchOfficial": "Fetch official releases from Mojang",
+      "offline": "Couldn't fetch the release list. Installed and cached sources remain available offline.",
+      "searchOfficial": "Search official releases",
+      "officialVersion": "Official release",
+      "noResults": "No matching versions.",
+      "downloadSelected": "Download selected release"
+    },
     "useLocal": "Use the installed Minecraft {{version}}",
     "findGame": "Find game folder…",
     "noRelease": "No Minecraft Java Edition release with a client jar was found in that folder.",
     "download": {
       "button": "Download vanilla assets (about 45 MB, from Mojang's official servers)",
-      "note": "This connects to Mojang's official servers (piston-meta.mojang.com, piston-data.mojang.com, resources.download.minecraft.net) and downloads the latest Minecraft Java Edition release client jar, plus a few dozen sound files the built-in templates commonly use (estimated under 2 MB), into this app's data folder on your computer. Only its textures and sounds are read. Later, the app fetches another sound's file from resources.download.minecraft.net only when you preview or pick that sound, or confirm fetching before an export. No personal information is sent, nothing updates automatically, and nothing is downloaded in bulk in the background.",
+      "note": "Downloading connects to Mojang's official servers (piston-meta.mojang.com, piston-data.mojang.com, resources.download.minecraft.net) and saves the selected or latest Minecraft Java Edition release's client jar, asset index, indexed panorama faces and Unihex fonts, and commonly used sounds in the app's data folder. Verified files are reused. Later, the app fetches other sounds only when you preview or pick them, or confirm fetching before export. No personal information is sent. Versions aren't updated automatically or downloaded in the background.",
       "progress": "Download progress",
       "cancel": "Cancel download",
       "errors": {
@@ -336,14 +405,17 @@
       },
       "retry": "Download again"
     },
+    "panoramaFallback": "Panorama unavailable. Using a dark background instead; panorama speed and blur have no effect.",
+    "openAssetSettings": "Open asset settings",
     "addPack": "Add resource pack…",
     "addFolder": "Add folder…",
-    "dropHint": "You can also drop a zip onto the window.",
+    "dropHint": "Add or drop a Java ZIP, an unencrypted Bedrock MCPACK, or a resource pack folder.",
     "dropOverlay": "Drop to add a resource pack",
     "added": "Resource pack added.",
     "addErrors": {
-      "rejected": "Resource pack rejected: it contains unsafe file paths.",
-      "unsupported": "Only zip resource packs or folders can be added.",
+      "rejected": "Resource pack rejected: the archive or manifest is invalid or unsafe.",
+      "unsupported": "This pack is unsupported or doesn't match the source being reconnected.",
+      "encrypted": "Encrypted Bedrock packs aren't supported.",
       "unreadable": "That file can't be read."
     },
     "onboarding": {
@@ -366,6 +438,8 @@
         "done": "Done",
         "version": "Reading version info for {{version}}…",
         "scan": "Reading the asset list inside the jar…",
+        "panorama": "Preparing panorama textures for {{version}}…",
+        "fonts": "Preparing vanilla fonts for {{version}}…",
         "manifest": "Fetching the version list…",
         "sounds": "Fetching sound files ({{done}} of {{total}})…",
         "stack": "Adding vanilla assets to the resource stack…",
@@ -376,6 +450,7 @@
       "stages": {
         "manifest": "Fetch version list",
         "extract": "Extract assets",
+        "panorama": "Prepare panorama textures",
         "jar": "Download client jar",
         "finalize": "Build asset index",
         "sounds": "Fetch common sounds"
@@ -539,7 +614,7 @@
       "general": "Interface language and the first-run setup.",
       "shortcuts": "Click the key next to a command to record a new shortcut. Press Esc to cancel recording.",
       "appearance": "Theme and motion. Changes apply right away.",
-      "updates": "Your version, checking for new ones, and how and where updates come from."
+      "updates": "Check for new versions and choose your update mode, channel, and source."
     },
     "onboarding": {
       "hint": "Go through language, theme, assets and folders again. Your current choices are kept.",
@@ -638,6 +713,16 @@
     }
   },
   "editor": {
+    "font": {
+      "default": "Automatic (game default)",
+      "unavailable": "Unavailable: {{id}}",
+      "usage": {
+        "whole": "At least one line is rendered entirely in a system font.",
+        "partial": "Some characters are rendered in a system font because their glyphs are missing.",
+        "mixed": "Some lines use a system font throughout; others use it only for missing glyphs.",
+        "assets": "Open asset settings"
+      }
+    },
     "color": {
       "hex": "Hex",
       "recent": "Recent",
@@ -746,7 +831,17 @@
       "remote": "Not downloaded yet; fetched from Mojang's official server when you preview or pick it",
       "unavailable": "No file for this sound in the current resources",
       "loading": "Reading the sound list…",
-      "noLibrary": "No assets yet, so there are no sounds to pick."
+      "noLibrary": "No audio yet. Import a file or add game assets.",
+      "importEffect": "Import sound effect",
+      "importMusic": "Import music",
+      "importFailed": "Could not import the audio file. Choose a supported file up to 16 MB.",
+      "missingChinese": "Chinese name missing",
+      "downloadNames": "Get Chinese names from Mojang",
+      "downloadNamesFailed": "Could not get the vanilla Chinese names.",
+      "variants_one": "{{count}} variant",
+      "variants_other": "{{count}} variants",
+      "kind": { "effect": "Sound effects", "music": "Music" },
+      "source": { "vanilla": "Vanilla", "pack-new": "Added by pack", "definition-override": "Event definition overridden", "file-override": "Same-name audio replaced", "builtin": "Built-in", "imported": "Imported" }
     },
     "picker": {
       "recent": "Recent",
@@ -774,7 +869,17 @@
       "replace": "Replace “{{name}}”",
       "weight": "Weight of “{{name}}”",
       "remove": "Remove “{{name}}”",
-      "add": "Add block"
+      "add": "Add block",
+      "drag": "Drag to reorder {{name}}",
+      "moveUp": "Move {{name}} up",
+      "moveDown": "Move {{name}} down",
+      "moved": "{{name}} moved to position {{position}}",
+      "editOrder": "Edit order",
+      "collapse": "Collapse list",
+      "presets": "Presets",
+      "rainbow": "Rainbow concrete",
+      "rainbowHint": "Replace the block list with seven concrete colors",
+      "rainbowApplied": "Block list replaced with seven concrete colors"
     },
     "texture": {
       "none": "(none)",
@@ -818,7 +923,15 @@
     "stages": "Stages",
     "sound": "Sound",
     "cut": "Cut point",
-    "toEnd": "Go to end"
+    "toEnd": "Go to end",
+    "endHandle": "Resize end of {{label}}",
+    "stageStart": "Go to start of {{label}}",
+    "stageEnd": "Go to end of {{label}}",
+    "resetStage": "Reset {{label}} duration",
+    "goToFrame": "Go to {{timecode}}",
+    "goToCut": "Go to cut point",
+    "beforeCut": "Go to frame before cut",
+    "goToCue": "Go to sound cue at {{timecode}}"
   },
   "audio": {
     "missing": "These sounds aren't in the current resources and are muted: {{list}}",
@@ -1069,6 +1182,13 @@
       "notify": "Checks at startup and every few hours, and tells you when a new version is out. You decide whether to download it.",
       "off": "Never goes online to check by itself. Check manually here when you want."
     },
+    "channel": "Update channel",
+    "channelHint": "main is the stable track, dev is for development builds, and Codex is experimental. Each track is independent; only the selected channel is checked.",
+    "channels": {
+      "codex": "Codex",
+      "main": "main",
+      "dev": "dev"
+    },
     "source": "Update source",
     "sourceHint": "Where new versions come from. If it can't be reached, the other source is tried.",
     "sourceAutoHint": "Picked from the system time zone; currently {{source}}. If it can't be reached, the other source is tried.",
@@ -1079,6 +1199,7 @@
     },
     "status": {
       "idle": "Not checked yet.",
+      "switchingChannel": "Switching update channel…",
       "checking": "Checking…",
       "upToDate": "You're up to date.",
       "upToDateAt": "You're up to date (checked {{time}}).",
@@ -1091,7 +1212,8 @@
     },
     "errors": {
       "network": "Couldn't reach the update source. Check your connection and try again.",
-      "no-release": "No usable release was found on the update source.",
+      "no-release": "No version has been published for the {{channel}} channel yet. Updates from other channels aren't used.",
+      "channelSave": "Couldn't save the update channel. Try again.",
       "no-asset": "The latest version has no installer for this platform yet. Try again later.",
       "checksum": "The installer failed verification and was discarded. Try again.",
       "install": "Couldn't start the installer.",

@@ -1,11 +1,12 @@
 // 工程的新建、打开、保存、另存为（docs/01-product-architecture.md 1.9）。路径只在主进程：这里只有句柄。
-import { compareVersionStrings, diffFromDefaults } from '@allay/template-sdk';
+import { CompositionFpsSchema, diffFromDefaults, studioMaterialManifest, type Composition } from '@allay/template-sdk';
 import i18next from 'i18next';
 import type { ProjectData, ProjectOpenResult } from '../../../shared/project';
 import { notify } from '../../stores/noticeStore';
 import { clearHistory, isDirty, useProjectStore } from '../../stores/projectStore';
 import { useResourceStore } from '../../stores/resourceStore';
 import { useTemplateStore } from '../../stores/templateStore';
+import { useTransportStore } from '../../stores/transportStore';
 import { useUiStore } from '../../stores/uiStore';
 import { DEFAULT_TEMPLATE_ID, readTemplate } from '../../templates/catalog';
 import { previewEngine } from '../preview/previewEngine';
@@ -22,17 +23,17 @@ function resourceHint(): string[] {
 
 export function projectData(): ProjectData | null {
   const s = useProjectStore.getState();
-  if (!s.template) return null;
-  const fps = s.output.fps as ProjectData['output']['fps'];
-  return {
+  const fps = s.composition?.fps ?? CompositionFpsSchema.parse(s.output.fps);
+  const common = {
     name: s.name ?? t('project.untitled'),
-    template: s.template.ref,
-    params: diffFromDefaults(s.template.params, s.params, { locale: i18next.language }),
     output: { width: s.output.width, height: s.output.height, fps },
     export: s.exportSettings,
     preview: { background: useUiStore.getState().settings.editor.background },
     resourceHint: resourceHint(),
   };
+  if (s.composition) return { ...common, composition: s.composition };
+  if (!s.template) return null;
+  return { ...common, template: s.template.ref, params: diffFromDefaults(s.template.params, s.params, { locale: i18next.language }) };
 }
 
 /** 有未保存的改动时先问一句；返回 false 表示用户取消 */
@@ -41,16 +42,40 @@ async function confirmDiscard(): Promise<boolean> {
   return askConfirm({ title: t('project.unsaved.title'), body: t('project.unsaved.body'), confirm: t('project.unsaved.discard') });
 }
 
-export async function newProject(): Promise<void> {
-  if (!(await confirmDiscard())) return;
+export async function newProject(): Promise<boolean> {
+  if (!(await confirmDiscard())) return false;
   const entries = await useTemplateStore.getState().refresh();
   const flagship = entries.filter((e) => e.id === DEFAULT_TEMPLATE_ID).at(-1) ?? entries.find((e) => !e.baseMissing);
-  if (!flagship) return;
+  if (!flagship) return false;
   const template = await readTemplate(flagship.id, flagship.version);
-  if (!template) return;
+  if (!template) return false;
   useProjectStore.getState().reset({ template, name: null, handle: null, locale: i18next.language });
   clearHistory();
   previewEngine.retry();
+  return true;
+}
+
+export async function newComposition(fromQuick = false): Promise<boolean> {
+  if (!(await confirmDiscard())) return false;
+  const { template, params, output, exportSettings, composition: current } = useProjectStore.getState();
+  const transport = useTransportStore.getState();
+  const fps = CompositionFpsSchema.parse(output.fps);
+  const initial = fromQuick && !current && template ? {
+    id: crypto.randomUUID(), startFrame: 0, sourceInFrame: 0,
+    durationFrames: Math.max(1, Math.round((transport.duration || 1) * fps)), template: template.ref, params: structuredClone(params),
+  } : null;
+  const composition: Composition = {
+    formatVersion: 1, fps, durationFrames: Math.max(fps * 5, initial?.durationFrames ?? 0),
+    tracks: initial ? [{ id: crypto.randomUUID(), name: t('gallery.title'), locked: false, muted: false, clips: [initial] }] : [],
+  };
+  const fileNames = useProjectStore.getState().fileNames;
+  useProjectStore.getState().reset({ template: null, composition, output, exportSettings, name: null, handle: null });
+  if (initial) useProjectStore.setState({ fileNames });
+  clearHistory();
+  transport.setPlaying(false);
+  transport.setTime(0);
+  previewEngine.retry();
+  return true;
 }
 
 async function applyOpened(result: ProjectOpenResult): Promise<boolean> {
@@ -61,27 +86,40 @@ async function applyOpened(result: ProjectOpenResult): Promise<boolean> {
   }
   const { data } = result;
   const entries = await useTemplateStore.getState().refresh();
-  // 引用的模板：同一个版本优先，没有就用同一个 id 的最高版本（模板升级后工程照常可用）
-  const versions = entries.filter((e) => e.id === data.template.id && !e.baseMissing).map((e) => e.version).sort(compareVersionStrings);
-  const version = versions.includes(data.template.version) ? data.template.version : versions.at(-1);
-  const template = version ? await readTemplate(data.template.id, version) : null;
-  if (!template) {
-    notify('error', t('project.errors.templateMissing', { id: data.template.id, version: data.template.version }));
-    return false;
+  let source: Parameters<ReturnType<typeof useProjectStore.getState>['reset']>[0];
+  if ('composition' in data) {
+    const installed = new Set(entries.filter((entry) => !entry.baseMissing).map(({ id, version }) => `${id}@${version}`));
+    const missing = new Map(data.composition.tracks.flatMap((track) => track.clips.flatMap(({ template }) => {
+      const key = `${template.id}@${template.version}`;
+      return installed.has(key) || studioMaterialManifest(template) ? [] : [[key, template] as const];
+    })));
+    const first = missing.values().next().value;
+    if (first) notify('error', t('project.errors.templateMissing', first));
+    source = { template: null, composition: data.composition, name: result.name, handle: result.handle };
+  } else {
+    const template = await readTemplate(data.template.id, data.template.version);
+    if (!template) {
+      notify('error', t('project.errors.templateMissing', data.template));
+      return false;
+    }
+    source = { template, params: data.params, name: result.name, handle: result.handle };
   }
   useProjectStore.getState().reset({
-    template,
-    params: data.params,
+    ...source,
     output: data.output,
     exportSettings: data.export,
-    name: result.name,
-    handle: result.handle,
     locale: i18next.language,
   });
   clearHistory();
+  const transport = useTransportStore.getState();
+  transport.setPlaying(false);
+  transport.setTime(0);
   useUiStore.getState().setEditor({ background: data.preview.background });
   previewEngine.retry();
-  if (result.missingFiles.length > 0) notify('error', t('project.missingFiles', { keys: result.missingFiles.join(', ') }));
+  if (result.missingFiles.length > 0) {
+    if ('composition' in data) notify('info', i18next.language.startsWith('zh') ? '有片段的图片待重链；请选择片段后重新选择图片。' : 'Some clips need image relinking. Select a clip to choose the image again.');
+    else notify('error', t('project.missingFiles', { keys: result.missingFiles.join(', ') }));
+  }
   else {
     const now = resourceHint();
     const same = now.length === data.resourceHint.length && now.every((h, i) => h === data.resourceHint[i]);
@@ -109,14 +147,15 @@ export async function openRecent(id: string): Promise<boolean> {
 export async function saveProject(as = false): Promise<boolean> {
   const data = projectData();
   if (!data) return false;
-  const { handle } = useProjectStore.getState();
+  const { handle, revision, savedRevision } = useProjectStore.getState();
   const r = as ? await window.allay.project.saveAs(data) : await window.allay.project.save(handle, data);
   if (r.canceled) return false;
   if (!r.ok) {
     notify('error', t(`project.errors.${r.error}`));
     return false;
   }
-  useProjectStore.getState().markSaved(r.name, r.handle);
+  const current = useProjectStore.getState();
+  if (current.handle === handle && current.savedRevision === savedRevision) current.markSaved(r.name, r.handle, revision);
   notify('info', t('project.saved', { name: r.name }));
   return true;
 }

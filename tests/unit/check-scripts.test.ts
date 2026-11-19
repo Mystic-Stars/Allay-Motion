@@ -26,7 +26,8 @@ describe('check-licenses（9.8）', () => {
     ['UNKNOWN', 'x', false],
     ['', 'x', false],
     ['SEE LICENSE IN LICENSE.md', 'x', false],
-    ['OFL-1.1', '@fontsource-variable/inter', true],
+    ['OFL-1.1', '@fontsource-variable/inter', false],
+    ['MIT', '@fontsource/inter', false],
     ['OFL-1.1', 'some-lib', false],
     ['BUSL-1.1', 'x', false],
   ])('%s（%s）→ %s', (license, name, allowed) => {

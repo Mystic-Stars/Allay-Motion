@@ -1,3 +1,5 @@
+import type { FontCatalog } from '../shared/fonts';
+import type { CodeInspectorParentApi } from '../shared/code-inspector';
 import type {
   ChooseFolderResult,
   ExportFinishResult,
@@ -7,14 +9,18 @@ import type {
   FfmpegInfo,
   H264Probe,
 } from '../shared/export';
-import type { BitmapFontTables } from '@allay/assets';
 import type { AppInfo, PickedFile, TitleBarColors } from '../shared/ipc-contract';
 import type { HostCommandRequest, HostCommandResult } from '../shared/host-commands';
-import type { AddPackResult, CacheUsage, ChooseGameDirResult, DownloadResult, FontProvidersResult, ResourceState, SoundFilesResult, SoundLibrary, SoundVariantInfo } from '../shared/resources';
+import type { MacMenuState } from '../shared/mac-menu';
+import type { AddPackResult, CacheUsage, ChooseGameDirResult, DownloadResult, FontProvidersResult, InstancePackInfo, OfficialVersion, ResourceLocation, ResourceState, SoundFilesResult, SoundLibrary, SoundVariantInfo } from '../shared/resources';
 import type { ProjectData, ProjectOpenResult, ProjectSaveResult, RecentProject } from '../shared/project';
 import type { UiSettings, UiSettingsPatch } from '../shared/settings';
 import type { FolderChooseResult, FolderInfo, FolderKind, FoldersInfo } from '../shared/folders';
 import type { UpdateState } from '../shared/updates';
+import type { SourceReadResult, TemplateId, WriteResult } from '@allay/host-api';
+import type { CompositionPackageEntry, CompositionPackageResult, FreezeCompositionRequest, ReadCompositionPackageResult, WriteSourceRequest } from '../shared/template-authoring';
+import type { SkinsApi } from '../shared/skins';
+import type { ImportedSound } from '../shared/sound';
 import type {
   CommitResult,
   CopyBuiltinRequest,
@@ -31,8 +37,16 @@ import type {
   TemplateEntry,
 } from '../shared/templates';
 
-/** 渲染进程能看到的唯一接口：window.allay（docs/01-product-architecture.md 1.8） */
+/** 主窗口渲染进程能看到的唯一接口：window.allay（docs/01-product-architecture.md 1.8） */
 export interface AllayApi {
+  codeInspector?: CodeInspectorParentApi;
+  skins?: SkinsApi;
+  sound: {
+    pick(kind: ImportedSound['kind']): Promise<ImportedSound | null>;
+    list(): Promise<ImportedSound[]>;
+    read(file: string, profileId?: string): Promise<Uint8Array | null>;
+    fetchNames(): Promise<void>;
+  };
   app: {
     info(): Promise<AppInfo>;
   };
@@ -46,6 +60,9 @@ export interface AllayApi {
     setTitleBarColors(colors: TitleBarColors): Promise<void>;
     /** 重新载入界面（错误页用；未保存的改动会丢） */
     reload(): Promise<void>;
+  };
+  fonts: {
+    list(profileId?: string): Promise<FontCatalog>;
   };
   files: {
     /** 弹出主进程的文件对话框；取消时为 null */
@@ -79,32 +96,35 @@ export interface AllayApi {
     layers(): Promise<ResourceState>;
     stamp(): Promise<string>;
     /** 资源栈里的一个文件（例如 assets/minecraft/textures/block/stone.png）；没有时为 null */
-    read(path: string): Promise<Uint8Array | null>;
+    read(path: string, profileId?: string): Promise<Uint8Array | null>;
     /** 贴图 PNG 和同一层的 .mcmeta */
-    readTexture(id: string): Promise<{ png: Uint8Array; mcmeta: string | null } | null>;
+    readTexture(id: string, profileId?: string): Promise<{ png: Uint8Array; mcmeta: string | null } | null>;
     /** 音效事件的全部变体（资源栈里合并后的 sounds.json）；没有这个事件时为 null */
-    soundVariants(eventId: string): Promise<SoundVariantInfo[] | null>;
+    soundVariants(eventId: string, profileId?: string): Promise<SoundVariantInfo[] | null>;
     /** 音效选择器的库：资源栈合并后的 sounds.json 里的全部事件和可用状态 */
-    soundLibrary(): Promise<SoundLibrary>;
+    soundLibrary(profileId?: string): Promise<SoundLibrary>;
     /**
      * 音效文件（音效名）的状态；fetch 为真时联网取回下载缓存的原版层里还没取的对象。
      * 只在用户试听、选中音效，或导出前确认取回时调用
      */
-    soundFiles(files: string[], fetch: boolean): Promise<SoundFilesResult>;
-    list(prefix: string): Promise<string[]>;
-    fontProviders(fontId: string): Promise<FontProvidersResult | null>;
-    /** 兜底像素字体 */
-    fallbackFont(): Promise<BitmapFontTables | null>;
+    soundFiles(files: string[], fetch: boolean, profileId?: string): Promise<SoundFilesResult>;
+    list(prefix: string, profileId?: string): Promise<string[]>;
+    fontProviders(fontId: string, profileId?: string): Promise<FontProvidersResult | null>;
     /** 重新离线探测本机游戏和下载缓存 */
     detectMinecraft(): Promise<ResourceState>;
     setVanilla(patch: { consent?: boolean; enabled?: boolean }): Promise<ResourceState>;
     /** 弹出主进程的目录对话框选游戏目录 */
-    chooseGameDir(): Promise<ChooseGameDirResult>;
+    chooseGameDir(reconnectId?: string): Promise<ChooseGameDirResult>;
+    selectProfile(profileId: string | null): Promise<ResourceState>;
+    officialVersions(): Promise<OfficialVersion[]>;
+    locateProfile(profileId: string, target: ResourceLocation): Promise<boolean>;
+    instancePacks(profileId: string): Promise<InstancePackInfo[]>;
+    setInstancePack(profileId: string, packId: string, enabled: boolean): Promise<ResourceState>;
     /** 联网：从 Mojang 官方服务器下载最新正式版客户端 jar。只在用户点了按钮后调用 */
-    downloadVanilla(): Promise<DownloadResult>;
+    downloadVanilla(versionId?: string): Promise<DownloadResult>;
     cancelDownload(): Promise<void>;
     /** 弹出主进程的对话框添加资源包 */
-    addPack(kind: 'zip' | 'folder'): Promise<AddPackResult>;
+    addPack(kind: 'zip' | 'folder', reconnectId?: string): Promise<AddPackResult>;
     /** 拖进窗口的资源包：只接收 File 对象，路径由 preload 取 */
     addDroppedPack(file: File): Promise<AddPackResult>;
     removeLayer(id: string): Promise<ResourceState>;
@@ -142,6 +162,13 @@ export interface AllayApi {
     writeDevFiles(id: string, version: string): Promise<TemplateDevResult>;
     /** 在系统文件管理器里打开用户模板的文件夹 */
     openFolder(id: string, version: string): Promise<TemplateDevResult>;
+    readSource(ref: TemplateId): Promise<SourceReadResult>;
+    writeSource(ref: TemplateId, request: WriteSourceRequest): Promise<WriteResult>;
+    createBlank(name: string): Promise<TemplateEntry | null>;
+    freezeComposition(request: FreezeCompositionRequest): Promise<CompositionPackageResult>;
+    importComposition(): Promise<CompositionPackageResult>;
+    listCompositions(): Promise<CompositionPackageEntry[]>;
+    openComposition(id: string): Promise<ReadCompositionPackageResult>;
     /** 用户模板文件夹在应用之外被改动（应用自己的写入不触发）；返回取消订阅的函数 */
     onChanged(callback: (change: TemplateDevChange) => void): () => void;
   };
@@ -171,6 +198,7 @@ export interface AllayApi {
     onCommand(callback: (request: HostCommandRequest) => void): () => void;
     /** 交回命令的结果；主进程按 schema 校验 */
     commandResult(result: HostCommandResult): Promise<boolean>;
+    setMacMenuState?(state: MacMenuState): Promise<void>;
     /** 界面就绪：首屏画完、初始模板装好、命令通道接好之后调用一次（M8） */
     ready(): Promise<void>;
   };

@@ -1,4 +1,4 @@
-import { isSafeRelativePath } from '@allay/assets';
+import { isSafeRelativePath, type SoundNames } from '@allay/assets';
 import { z } from 'zod';
 
 // resources、cache 两个 IPC 命名空间的数据（docs/01-product-architecture.md 1.8、docs/03-assets.md）。
@@ -18,7 +18,7 @@ export interface LayerInfo {
   legacyFormat: boolean;
   warnings: string[];
   /** 原版层：本机游戏还是下载的；资源包：zip 还是文件夹 */
-  source?: 'local' | 'downloaded' | 'zip' | 'folder';
+  source?: 'local' | 'downloaded' | 'bedrock' | 'zip' | 'folder';
   /** 内置层里有没有任何文件（v1 不自制素材，通常是空的） */
   empty?: boolean;
 }
@@ -44,6 +44,45 @@ export interface VanillaState {
   problem: 'missing' | 'jar-unreadable' | null;
 }
 
+export const ResourceProfileIdSchema = z.string().max(128).regex(/^(?:(?:local|downloaded|instance):[0-9a-f]{32}|bedrock:[0-9a-f-]{36}:[0-9a-f]{32})$/);
+export const OfficialVersionIdSchema = z.string().max(64).regex(/^[\w.-]+$/).refine((id) => id !== '.' && id !== '..');
+export const ResourceLocationSchema = z.enum(['game', 'packs', 'source']);
+export type ResourceLocation = z.infer<typeof ResourceLocationSchema>;
+
+export interface OfficialVersion {
+  versionId: string;
+  releaseTime: string | null;
+}
+
+export interface ResourceProfileInfo {
+  id: string;
+  source: 'local' | 'downloaded' | 'bedrock';
+  name: string;
+  versionId: string;
+  versionType?: string;
+  releaseTime?: string;
+  missing: boolean;
+  stamp: string;
+  /** 仅供界面定位，模板的资源回调只收到资源载荷。 */
+  gameDir: string | null;
+  resourcePacksDir: string | null;
+  sourcePath: string;
+}
+
+export interface InstancePackInfo {
+  id: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+  missing: boolean;
+}
+
+export interface ResourceLibrary {
+  profiles: ResourceProfileInfo[];
+  pinnedId: string | null;
+  activeProfileId: string | null;
+}
+
 export const DOWNLOAD_ERROR_KINDS = ['network', 'verify', 'disk', 'unknown'] as const;
 export type DownloadErrorKind = (typeof DOWNLOAD_ERROR_KINDS)[number];
 
@@ -60,7 +99,7 @@ export const STAGE_STATUSES = ['pending', 'active', 'done', 'failed', 'canceled'
 export type StageStatus = (typeof STAGE_STATUSES)[number];
 
 /** 当前在做什么（界面上的一行字） */
-export const DOWNLOAD_ACTIVITIES = ['manifest', 'version', 'jar', 'jar-cached', 'index', 'scan', 'sounds-list', 'sounds', 'stack', 'done'] as const;
+export const DOWNLOAD_ACTIVITIES = ['manifest', 'version', 'jar', 'jar-cached', 'index', 'panorama', 'fonts', 'scan', 'sounds-list', 'sounds', 'stack', 'done'] as const;
 export type DownloadActivity = (typeof DOWNLOAD_ACTIVITIES)[number];
 
 const Bytes = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -94,8 +133,8 @@ export const DownloadStateSchema = z.discriminatedUnion('status', [
   /** 成功：留着最后的进度，直到下一次下载（引导页用它显示“完成”） */
   z.strictObject({ status: z.literal('done'), progress: DownloadProgressViewSchema }),
   /** 失败、取消：progress.stage 是停下的那一步，那一步的状态是 failed / canceled */
-  z.strictObject({ status: z.literal('failed'), error: z.enum(DOWNLOAD_ERROR_KINDS), progress: DownloadProgressViewSchema }),
-  z.strictObject({ status: z.literal('canceled'), progress: DownloadProgressViewSchema }),
+  z.strictObject({ status: z.literal('failed'), error: z.enum(DOWNLOAD_ERROR_KINDS), progress: DownloadProgressViewSchema, requestedVersion: OfficialVersionIdSchema.optional() }),
+  z.strictObject({ status: z.literal('canceled'), progress: DownloadProgressViewSchema, requestedVersion: OfficialVersionIdSchema.optional() }),
 ]);
 export type DownloadState = z.infer<typeof DownloadStateSchema>;
 
@@ -111,25 +150,20 @@ export interface ResourceState {
   detecting: boolean;
   /** 有没有任何启用的素材层（原版层或资源包）。都没有时界面显示引导状态 */
   hasAssets: boolean;
+  /** 网页没有本机版本库。 */
+  library?: ResourceLibrary;
 }
 
 export type AddPackResult =
   | { ok: true; id: string; warnings: string[] }
-  | { ok: false; error: 'rejected' | 'unsupported' | 'unreadable'; detail?: string }
+  | { ok: false; error: 'rejected' | 'unsupported' | 'unreadable' | 'encrypted'; detail?: string }
   | { canceled: true };
 
 export type ChooseGameDirResult = { ok: true } | { ok: false; error: 'no-release' } | { canceled: true };
 
 export type DownloadResult = { ok: true } | { ok: false; error: DownloadErrorKind | 'busy' } | { canceled: true };
 
-/** fontProviders 的结果：bitmap 提供器只给贴图在资源栈里的路径，由渲染进程读取解码 */
-export interface FontProvidersResult {
-  providers: (
-    | { type: 'bitmap'; file: string; ascent: number; height: number; rows: number[][] }
-    | { type: 'space'; advances: [number, number][] }
-  )[];
-  skipped: string[];
-}
+export type { FontProvidersResult } from './fonts';
 
 /** 音效事件的一个变体（resources.soundVariants）：file 是带命名空间的音效名 */
 export interface SoundVariantInfo {
@@ -137,6 +171,7 @@ export interface SoundVariantInfo {
   volume: number;
   pitch: number;
   weight: number;
+  kind?: 'effect' | 'music';
 }
 
 /**
@@ -148,7 +183,18 @@ export type SoundFileState = 'local' | 'remote' | 'missing';
 /** 音效选择器的库：资源栈合并后的 sounds.json 里的全部事件 */
 export interface SoundLibrary {
   stamp: string;
-  events: { id: string; state: SoundFileState }[];
+  events: SoundLibraryItem[];
+  namesDownloadable?: boolean;
+}
+
+export interface SoundLibraryItem {
+  id: string;
+  state: SoundFileState;
+  kind: 'effect' | 'music';
+  names: SoundNames;
+  source: 'vanilla' | 'pack-new' | 'definition-override' | 'file-override' | 'builtin' | 'imported';
+  fileOverride?: boolean;
+  variantCount: number;
 }
 
 export type SoundFilesResult = { ok: true; states: Record<string, SoundFileState> } | { ok: false; error: DownloadErrorKind; states: Record<string, SoundFileState> };

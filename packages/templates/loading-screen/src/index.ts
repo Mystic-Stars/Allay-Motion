@@ -4,6 +4,8 @@
 // 背景是一组实例化的方块（正交相机、不加面明暗，只看得见朝向相机的那一面），以 tileSize 平铺并整体染成 dim 倍的亮度；
 // 这样资源包换了贴图、方块的面用哪张贴图都由引擎的方块目录决定，模板不需要知道。
 import type { ParamValue, SetupContext, TemplateInstance, TemplateModule, TextObject } from '@allay/template-sdk';
+import { loadingProfile, setupVersionedLoading } from './versioned';
+import { isBedrockLoading, setupBedrockLoading } from './bedrock';
 
 const num = (v: ParamValue | undefined, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const str = (v: ParamValue | undefined, fallback: string): string => (typeof v === 'string' ? v : fallback);
@@ -22,6 +24,9 @@ const EPS = 1e-3;
 const template: TemplateModule = {
   async setup(ctx: SetupContext): Promise<TemplateInstance> {
     const { THREE, stage, scene, params } = ctx;
+    if (isBedrockLoading(params.loadingStyle)) return setupBedrockLoading(ctx, params.loadingStyle);
+    const profile = loadingProfile(params.loadingStyle);
+    if (profile) return setupVersionedLoading(ctx, profile);
     const W = stage.width;
     const H = stage.height;
     const blockId = str(params.block, 'minecraft:dirt');
@@ -82,10 +87,10 @@ const template: TemplateModule = {
     scene.add(front);
     const texts: TextObject[] = [];
     const maxWidth = W * 0.9;
-    const titleObj = ctx.text.create({ text: title, size: u, color: textColor, shadow: true, align: 'center', maxWidth });
+    const titleObj = ctx.text.create({ text: title, font: str(params.titleFont, 'minecraft:default'), size: u, color: textColor, shadow: true, align: 'center', maxWidth });
     texts.push(titleObj);
     titleObj.object.position.z = 3;
-    const subtitleObj = subtitle.trim() !== '' ? ctx.text.create({ text: subtitle, size: u, color: textColor, shadow: true, align: 'center', maxWidth }) : null;
+    const subtitleObj = subtitle.trim() !== '' ? ctx.text.create({ text: subtitle, font: str(params.subtitleFont, 'minecraft:default'), size: u, color: textColor, shadow: true, align: 'center', maxWidth }) : null;
     if (subtitleObj) {
       texts.push(subtitleObj);
       subtitleObj.object.position.z = 3;

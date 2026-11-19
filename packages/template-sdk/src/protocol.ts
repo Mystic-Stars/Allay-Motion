@@ -2,8 +2,13 @@
 // 线程边界两侧都用这些 schema 校验：Worker 校验宿主发来的请求，宿主校验 Worker 交回的结果。
 // 放在 template-sdk 是因为引擎只能依赖 three、template-sdk、assets（1.4），而这些 schema 需要 zod。
 import { z } from 'zod';
+import { COMPOSITION_MAX_CLIPS, COMPOSITION_MAX_SECONDS, CompositionIdSchema, CompositionSchema, CompositionTemplateSchema } from './composition';
 import { TemplateManifestSchema } from './manifest';
+import { studioMaterialKind } from './studio';
 import type { ParamValue } from './runtime';
+
+export const MAX_EXECUTION_TRACE_LINES = 4096;
+export const MAX_EXECUTION_TRACE_EDITS = 50_000;
 
 export const ParamValueSchema: z.ZodType<ParamValue> = z.lazy(() =>
   z.union([z.number(), z.string(), z.boolean(), z.null(), z.array(ParamValueSchema), z.record(z.string(), ParamValueSchema)]),
@@ -21,17 +26,45 @@ export type OutputSettings = z.infer<typeof OutputSettingsSchema>;
 
 /** 模板源码上限（04-templates.md 4.8 第 3 步） */
 export const MAX_TEMPLATE_CODE_BYTES = 1024 * 1024;
+const TraceLineSchema = z.int().min(1).max(MAX_TEMPLATE_CODE_BYTES + 1);
+export const ExecutionTraceLinesSchema = z.array(TraceLineSchema).max(MAX_EXECUTION_TRACE_LINES);
 
 export const LoadRequestSchema = z.strictObject({
   manifest: TemplateManifestSchema,
   code: z.string().min(1).max(MAX_TEMPLATE_CODE_BYTES),
   params: ParamValuesSchema,
   output: OutputSettingsSchema,
+  referenceSize: OutputSettingsSchema.pick({ width: true, height: true }).optional(),
   resourceStamp: z.string().max(256),
   /** text 参数缺值时按这个语言取默认值（4.4）；缺省英文 */
   locale: z.string().max(16).optional(),
 });
 export type LoadRequest = z.infer<typeof LoadRequestSchema>;
+
+export const CompositionSourceKeySchema = z.int().min(0).max(COMPOSITION_MAX_CLIPS - 1);
+const CompositionSourceBaseSchema = z.strictObject({
+  resourceStamp: z.string().max(1024),
+  template: CompositionTemplateSchema,
+  profile: z.string().min(1).max(256).optional(),
+});
+const CompositionSourceSchema = z.union([
+  CompositionSourceBaseSchema.extend(LoadRequestSchema.pick({ manifest: true, code: true }).shape)
+    .refine(({ template }) => !studioMaterialKind(template), { message: 'native material cannot provide script code' }),
+  CompositionSourceBaseSchema.refine(({ template }) => !!studioMaterialKind(template), { message: 'unknown native material' }),
+]);
+
+export const CompositionLoadRequestSchema = z.strictObject({
+  composition: CompositionSchema,
+  output: OutputSettingsSchema,
+  sources: z.array(CompositionSourceSchema).max(COMPOSITION_MAX_CLIPS),
+  locale: z.string().max(16).optional(),
+}).refine(({ composition, output }) => composition.fps === output.fps, { message: 'composition frame rate must match output' });
+export type CompositionLoadRequest = z.infer<typeof CompositionLoadRequestSchema>;
+export type EngineLoadRequest = LoadRequest | CompositionLoadRequest | null;
+
+export function compositionSourceKey(template: { id: string; version: string }, profile?: string): string {
+  return JSON.stringify([template.id, template.version, profile ?? null]);
+}
 
 /**
  * 引擎替一个 cue 选定的音效变体（02-engine.md 2.10）：file 是带命名空间的音效名（sounds.json 里的 name），
@@ -41,6 +74,7 @@ export const AudioCueVariantSchema = z.strictObject({
   file: z.string().min(1).max(256),
   volume: z.number().min(0).max(16),
   pitch: z.number().min(0).max(16),
+  kind: z.enum(['effect', 'music']).optional(),
 });
 export type AudioCueVariant = z.infer<typeof AudioCueVariantSchema>;
 
@@ -50,8 +84,15 @@ export const AudioCueSchema = z.strictObject({
   gain: z.number(),
   rate: z.number(),
   pan: z.number(),
+  spatial: z.strictObject({ pan: z.number().min(-1).max(1), gain: z.number().min(0).max(1) }).optional(),
   /** 选定的变体；资源栈里没有这个音效事件时为 null（宿主静音并给警告） */
   variant: AudioCueVariantSchema.nullable(),
+  /** 合成 cue：at 是裁切后的起点，offset 是已越过的播放秒数（尚未乘播放速率）。 */
+  clip: z.strictObject({
+    end: z.number().min(0).max(COMPOSITION_MAX_SECONDS),
+    offset: z.number().min(0),
+    profile: z.string().min(1).max(256).optional(),
+  }).optional(),
 });
 export type AudioCue = z.infer<typeof AudioCueSchema>;
 
@@ -121,11 +162,22 @@ export function clipDiagnosticMessage(message: string): string {
   return message.length <= MAX_DIAGNOSTIC_MESSAGE ? message : `${message.slice(0, MAX_DIAGNOSTIC_MESSAGE - 1)}…`;
 }
 
+export const EffectiveTimingSchema = z.strictObject({
+  durations: z.record(z.string().regex(/^[a-z][a-zA-Z0-9]{0,63}$/), z.number().min(0).max(30))
+    .refine((durations) => Object.keys(durations).length >= 1 && Object.keys(durations).length <= 16),
+  editable: z.boolean(),
+});
+
+export const ResourceNoticeCodeSchema = z.enum(['panorama-fallback', 'catalog-placeholder']);
+const ResourceNoticesSchema = z.array(ResourceNoticeCodeSchema).max(ResourceNoticeCodeSchema.options.length);
+
 export const LoadResultSchema = z.strictObject({
   duration: z.number().min(0.1).max(30),
   cutTime: z.number().nullable(),
   audioCues: z.array(AudioCueSchema),
   warnings: z.array(z.string()),
+  resourceNotices: ResourceNoticesSchema.optional(),
+  timing: EffectiveTimingSchema.optional(),
   /**
    * 静态规则检查的提示（rule 类诊断，H12）。由宿主在交给引擎之前算出并附上；引擎自己不填。
    * 可选字段：旧的调用方只看 warnings。
@@ -133,6 +185,15 @@ export const LoadResultSchema = z.strictObject({
   diagnostics: TemplateDiagnosticsSchema.optional(),
 });
 export type LoadResult = z.infer<typeof LoadResultSchema>;
+
+export const CompositionLoadResultSchema = LoadResultSchema.extend({
+  duration: z.number().min(0).max(COMPOSITION_MAX_SECONDS),
+  cutTime: z.null(),
+  totalFrames: z.int().min(0).max(COMPOSITION_MAX_SECONDS * 60),
+  clipTiming: z.array(z.strictObject({ id: CompositionIdSchema, timing: EffectiveTimingSchema })).max(COMPOSITION_MAX_CLIPS).optional(),
+  clipResourceNotices: z.array(z.strictObject({ id: CompositionIdSchema, notices: ResourceNoticesSchema })).max(COMPOSITION_MAX_CLIPS).optional(),
+});
+export type CompositionLoadResult = z.infer<typeof CompositionLoadResultSchema>;
 
 export const FrameQualitySchema = z.strictObject({
   /** 1 表示没有运动模糊 */
@@ -145,7 +206,80 @@ export type FrameQuality = z.infer<typeof FrameQualitySchema>;
 export const OpaqueSchema = z.strictObject({ key: z.string().regex(/^#[0-9a-fA-F]{6}$/) });
 export type Opaque = z.infer<typeof OpaqueSchema>;
 
-export const FrameStatsSchema = z.strictObject({ t: z.number(), ms: z.number() });
+export const ExecutionTraceTargetSchema = CompositionTemplateSchema.extend({ clipId: CompositionIdSchema.optional() });
+export type ExecutionTraceTarget = z.infer<typeof ExecutionTraceTargetSchema>;
+const TraceOffsetSchema = z.int().min(0).max(MAX_TEMPLATE_CODE_BYTES);
+export const ExecutionTraceConfigSchema = z.strictObject({
+  target: ExecutionTraceTargetSchema,
+  stem: z.string().regex(/^__allayTrace\d+$/).max(24),
+  insertions: z.array(z.union([
+    z.tuple([TraceOffsetSchema, z.enum(['mark', 'entry', 'block', 'expression']), TraceLineSchema]),
+    z.tuple([TraceOffsetSchema, z.enum(['end-block', 'end-expression'])]),
+  ])).min(1).max(MAX_EXECUTION_TRACE_EDITS),
+}).nullable();
+export type ExecutionTraceConfig = z.infer<typeof ExecutionTraceConfigSchema>;
+export type ExecutionTracePlan = Omit<NonNullable<ExecutionTraceConfig>, 'target'>;
+export const SetupTraceResultSchema = ExecutionTraceLinesSchema.nullable();
+export type SetupTraceResult = z.infer<typeof SetupTraceResultSchema>;
+
+function traceInsertion(stem: string, [, kind, line]: ExecutionTracePlan['insertions'][number]): string {
+  const call = kind === 'entry' ? `${stem}(${line},true)` : `${stem}(${line})`;
+  return kind === 'mark' || kind === 'entry' ? `;${call};` : kind === 'block' ? `{${call};` :
+    kind === 'expression' ? `(${call},(` : kind === 'end-block' ? ';}' : '))';
+}
+
+/** 宿主验证和预览 Worker 使用相同的受限插入操作；协议不携带可执行的字符串。 */
+export function applyExecutionTracePlan(source: string, { stem, insertions }: ExecutionTracePlan): string {
+  let from = 0;
+  const pieces: string[] = [];
+  for (const edit of insertions) {
+    const offset = edit[0];
+    if (offset < from || offset > source.length) throw new Error('invalid trace insertion offset');
+    pieces.push(source.slice(from, offset), traceInsertion(stem, edit));
+    from = offset;
+  }
+  pieces.push(source.slice(from), `\nvar ${stem}Sink;function ${stem}(line,entry){if(${stem}Sink)${stem}Sink(line,entry);}export function ${stem}Bind(sink){${stem}Sink=sink;}\n`);
+  return pieces.join('');
+}
+
+export function originalTraceLocation(source: string, plan: ExecutionTracePlan, location: { line: number; column: number }): { line: number; column?: number } {
+  const { line } = location;
+  const newlines = /\r\n|[\n\r\u2028\u2029]/g;
+  for (let current = 1; current < line; current++) if (!newlines.exec(source)) return { line };
+  const start = newlines.lastIndex;
+  const end = newlines.exec(source)?.index ?? source.length;
+  let column = location.column;
+  for (const edit of plan.insertions) {
+    const offset = edit[0];
+    if (offset < start) continue;
+    if (offset > end || offset - start >= column) break;
+    column = Math.max(offset - start + 1, column - traceInsertion(plan.stem, edit).length);
+  }
+  return { line, column };
+}
+
+/** 按实际画出墨迹的行标记，再按位合并到帧。4 只供旧帧协议兼容，不再生成。 */
+export const FontUsageFlag = {
+  /** 一行可见墨迹全来自系统字体。 */
+  whole: 1,
+  /** 同一行有资源栈与系统字形的可见墨迹。 */
+  partial: 2,
+  /** @deprecated 旧版显式内置 BDF 标记。 */
+  explicit: 4,
+  /** 发生系统回退，且字体请求归一化后为 minecraft:default。 */
+  resourceDefault: 8,
+} as const;
+const FontUsageSchema = z.strictObject({
+  clipId: CompositionIdSchema.optional(),
+  flags: z.int().min(1).max(15),
+});
+export type FontUsage = z.infer<typeof FontUsageSchema>;
+
+export const FrameStatsSchema = z.strictObject({
+  t: z.number(), ms: z.number(),
+  trace: ExecutionTraceLinesSchema.optional(),
+  fontUsage: z.array(FontUsageSchema).max(COMPOSITION_MAX_CLIPS).optional(),
+});
 export type FrameStats = z.infer<typeof FrameStatsSchema>;
 
 export const ResourceKindSchema = z.enum(['texture', 'sound-meta', 'font', 'raw']);
@@ -178,6 +312,30 @@ export const TexturePayloadSchema = z
 export type TexturePayload = z.infer<typeof TexturePayloadSchema>;
 
 /** 资源栈里的位图字体（原版 font/*.json 展开 reference 之后的 bitmap、space 提供器，3.9） */
+const OutlineShape = {
+  size: z.number().min(1).max(64),
+  oversample: z.number().min(1).max(8),
+  shift: z.tuple([z.number().min(-32).max(32), z.number().min(-32).max(32)]),
+  skip: z.string().max(65_536),
+};
+
+export const OutlineProviderPayloadSchema = z.strictObject({
+  type: z.literal('ttf'), ...OutlineShape,
+  bytes: typedArray<Uint8Array>(Uint8Array).refine((bytes) => bytes.byteLength >= 12 && bytes.byteLength <= 32 * 1024 * 1024),
+});
+
+const BitmapFontTablesShape = {
+  ascent: z.int().min(0).max(64),
+  descent: z.int().min(0).max(64),
+  codepoints: typedArray<Uint32Array>(Uint32Array),
+  metrics: typedArray<Int16Array>(Int16Array),
+  offsets: typedArray<Uint32Array>(Uint32Array),
+  bits: typedArray<Uint8Array>(Uint8Array),
+};
+const tableLengthsOk = (tables: { metrics: Int16Array; offsets: Uint32Array; codepoints: Uint32Array }) =>
+  tables.metrics.length === tables.codepoints.length * 5 && tables.offsets.length === tables.codepoints.length;
+export const BitmapFontTablesSchema = z.strictObject(BitmapFontTablesShape).refine(tableLengthsOk, { message: 'table lengths mismatch' });
+
 export const FontProviderPayloadSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('bitmap'),
@@ -187,6 +345,8 @@ export const FontProviderPayloadSchema = z.discriminatedUnion('type', [
     image: RgbaImageSchema,
   }),
   z.strictObject({ type: z.literal('space'), advances: z.array(z.tuple([z.int().min(0).max(0x10ffff), z.number().min(-512).max(512)])).max(65_536) }),
+  OutlineProviderPayloadSchema,
+  z.strictObject({ type: z.literal('unihex'), tables: BitmapFontTablesSchema }),
 ]);
 export type FontProviderPayload = z.infer<typeof FontProviderPayloadSchema>;
 
@@ -198,26 +358,13 @@ export const FontPayloadSchema = z.strictObject({
 });
 export type FontPayload = z.infer<typeof FontPayloadSchema>;
 
-/** 兜底的 BDF 像素字体（@allay/assets 的 BitmapFontTables） */
-export const BitmapFontPayloadSchema = z
-  .strictObject({
-    kind: z.literal('bdf'),
-    ascent: z.int().min(0).max(64),
-    descent: z.int().min(0).max(64),
-    codepoints: typedArray<Uint32Array>(Uint32Array),
-    metrics: typedArray<Int16Array>(Int16Array),
-    offsets: typedArray<Uint32Array>(Uint32Array),
-    bits: typedArray<Uint8Array>(Uint8Array),
-  })
-  .refine((p) => p.metrics.length === p.codepoints.length * 5 && p.offsets.length === p.codepoints.length, { message: 'table lengths mismatch' });
-export type BitmapFontPayload = z.infer<typeof BitmapFontPayloadSchema>;
-
 /** 音效事件的全部变体（resolveResource('sound-meta', 事件 ID)）：资源栈里合并后的 sounds.json 展开 event 引用之后 */
 export const SoundMetaVariantSchema = z.strictObject({
   file: z.string().min(1).max(256),
   volume: z.number().min(0).max(16),
   pitch: z.number().min(0).max(16),
   weight: z.number().min(0).max(1_000_000),
+  kind: z.enum(['effect', 'music']).optional(),
 });
 export type SoundMetaVariant = z.infer<typeof SoundMetaVariantSchema>;
 
@@ -227,12 +374,8 @@ export const SoundMetaPayloadSchema = z.strictObject({
 });
 export type SoundMetaPayload = z.infer<typeof SoundMetaPayloadSchema>;
 
-export const ResourcePayloadSchema = z.union([TexturePayloadSchema, FontPayloadSchema, BitmapFontPayloadSchema, SoundMetaPayloadSchema]);
+export const ResourcePayloadSchema = z.union([TexturePayloadSchema, FontPayloadSchema, SoundMetaPayloadSchema]);
 export type ResourcePayload = z.infer<typeof ResourcePayloadSchema>;
-
-/** 资源栈里的默认字体，和兜底字体的 ID（resolveResource('font', id)） */
-export const DEFAULT_FONT_ID = 'minecraft:default';
-export const FALLBACK_FONT_ID = 'allay:fallback';
 
 /** 缩略图请求（03-assets.md 3.10）：方块是带面明暗的等轴视角，物品正面平视 */
 export const ThumbRequestSchema = z.strictObject({

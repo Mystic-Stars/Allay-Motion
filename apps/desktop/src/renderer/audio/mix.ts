@@ -1,7 +1,7 @@
 // 导出的离线混音（docs/05-export.md 5.5）：OfflineAudioContext 走和预览同一段调度代码（schedule.ts），
 // 结尾 10 ms 淡出，峰值超过 0 dBFS 时整体压到 −1 dBFS，输出 48 kHz 立体声 16 位 PCM 的 WAV。
 import type { AudioCue } from '@allay/template-sdk';
-import { scheduleCues, voiceParams } from './schedule';
+import { cueWindow, scheduleCues, voiceParams } from './schedule';
 import { MIX_SAMPLE_RATE, type SoundBank } from './sound-bank';
 import { encodeWav } from './wav';
 
@@ -26,8 +26,10 @@ export function mixFrames(videoFrames: number, fps: number): number {
  * 离线混音。length 是样本数（mixFrames 给出）。同样的 cue、同样的解码结果，两次混音逐样本相同
  * （每个声音单独渲染、按 cue 的顺序相加；淡出和峰值处理在渲染之后用固定的算术做）。
  */
-export async function mixOffline(cues: readonly AudioCue[], length: number, bank: SoundBank): Promise<MixResult> {
+export async function mixOffline(cues: readonly AudioCue[], length: number, bank: SoundBank, signal?: AbortSignal): Promise<MixResult> {
+  signal?.throwIfAborted();
   const { voices, missing } = await bank.prepare(cues);
+  signal?.throwIfAborted();
   if (voices.length === 0 || length <= 0) return { wav: null, peakNormalized: false, missing };
   // 每个声音单独在一个离线上下文里渲染（同一个 scheduleCues），再按 cue 的顺序在这里相加。
   // 不把所有声音接到同一个 destination 上：Chromium 对一个节点的多路输入求和的顺序不固定，
@@ -36,16 +38,18 @@ export async function mixOffline(cues: readonly AudioCue[], length: number, bank
   const seconds = length / MIX_SAMPLE_RATE;
   for (const voice of voices) {
     const { cue, buffer } = voice;
-    if (!(cue.at >= 0) || cue.at >= seconds) continue;
-    const startFrame = Math.floor(cue.at * MIX_SAMPLE_RATE);
-    const rate = voiceParams(cue).rate;
+    const { rate, gain } = voiceParams(cue);
+    const window = gain > 0 ? cueWindow(cue, buffer.duration, rate, 0, seconds) : null;
+    if (!window) continue;
+    const startFrame = Math.floor(window.start * MIX_SAMPLE_RATE);
     // 这个声音最长占多少个样本（按播放速率换算），多留一个渲染块的余量；不超过视频结尾
-    const span = Math.min(length - startFrame, Math.ceil((buffer.duration / rate) * MIX_SAMPLE_RATE) + 256);
+    const span = Math.min(length - startFrame, Math.ceil(window.end * MIX_SAMPLE_RATE) - startFrame + 256);
     const ctx = new OfflineAudioContext(2, span, MIX_SAMPLE_RATE);
-    const offset = Math.min(startFrame / MIX_SAMPLE_RATE, cue.at);
+    const offset = Math.min(startFrame / MIX_SAMPLE_RATE, window.start);
     // 和预览同一个函数：时间轴的 offset 对应这个上下文的 0，声音在视频结尾截断
     scheduleCues(ctx, ctx.destination, [voice], { from: offset, startAt: 0, until: seconds });
     const rendered = await ctx.startRendering();
+    signal?.throwIfAborted();
     for (let c = 0; c < 2; c++) {
       const src = rendered.getChannelData(c);
       const dst = channels[c]!;

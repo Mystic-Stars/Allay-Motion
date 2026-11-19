@@ -8,15 +8,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* 字体（OFL 1.1，@fontsource 的 npm 包，经 font-src 'self' 加载）：只引用到的字重 */
-@import "@fontsource/ibm-plex-sans/400.css";
-@import "@fontsource/ibm-plex-sans/500.css";
-@import "@fontsource/ibm-plex-sans/600.css";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
-@import "@fontsource/noto-sans-sc/400.css";
-@import "@fontsource/noto-sans-sc/500.css";
-@import "@fontsource/noto-sans-sc/600.css";
 
 /* 主题由 <html data-theme="dark|light"> 决定；dark: 前缀跟随它而不是系统设置 */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
@@ -131,8 +122,8 @@
 
 /* ---------- 尺寸、字体、动效（与主题无关） ---------- */
 :root {
-  --font-ui: "IBM Plex Sans", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
-  --font-num: "IBM Plex Mono", "Noto Sans SC", Consolas, monospace;
+  --font-ui: system-ui, sans-serif;
+  --font-num: ui-monospace, "SFMono-Regular", Consolas, monospace;
 
   /* 字号：正文与控件 12，次要 11.5，刻度 10.5，面板标签 12.5（半粗），模板名标题 15，时间码 19 */
   --fs-body: 12px;

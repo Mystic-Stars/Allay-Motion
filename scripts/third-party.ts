@@ -11,7 +11,6 @@
 // - Electron（Chromium 的许可全文在安装目录的 LICENSES.chromium.html，太大，这里只指过去）；
 // - FFmpeg（LGPLv3，独立进程；许可全文是 ffmpeg/<平台>/LICENSE.txt，写明构建来源、版本和取得源码的方式；
 //   Windows 用 FFmpeg-Builds 的构建，macOS 用本项目从官方源码编译的，两份的来源都记在清单里）；
-// - 方舟像素字体（OFL-1.1，原样分发）。
 //
 // 用法：tsx scripts/third-party.ts           重新生成提交的 JSON
 //       tsx scripts/third-party.ts --check   只比对，不一致时退出码 1
@@ -24,7 +23,7 @@ import { FFMPEG_BUILD, FFMPEG_MACOS } from './ffmpeg-build';
 export const ROOT = resolve(import.meta.dirname, '..');
 export const THIRD_PARTY_JSON = join(ROOT, 'apps/desktop/src/renderer/features/settings/third-party-licenses.json');
 
-export type ThirdPartyKind = 'npm' | 'build' | 'runtime' | 'binary' | 'font';
+export type ThirdPartyKind = 'npm' | 'build' | 'runtime' | 'binary';
 
 export interface ThirdPartyEntry {
   name: string;
@@ -107,7 +106,7 @@ export function collectThirdParty(root: string = ROOT): ThirdPartyFile {
       name: p.name,
       version: p.version,
       license: p.license,
-      kind: p.name.startsWith('@fontsource') ? 'font' : 'npm',
+      kind: 'npm',
       author: p.author,
       homepage: p.homepage,
       text: p.path ? readLicenseText(p.path) : null,
@@ -140,16 +139,6 @@ export function collectThirdParty(root: string = ROOT): ThirdPartyFile {
     homepage: 'https://ffmpeg.org',
     text: null,
     seeFile: `resources/ffmpeg/${FFMPEG_BUILD.platform}/LICENSE.txt`,
-  });
-  entries.push({
-    name: 'Ark Pixel Font',
-    version: '2026.11.10',
-    license: 'OFL-1.1',
-    kind: 'font',
-    author: 'TakWolf',
-    homepage: 'https://github.com/TakWolf/ark-pixel-font',
-    text: readFileSync(join(root, 'resources/fonts/ark-pixel/OFL.txt'), 'utf8').replace(/\r\n?/g, '\n').trim(),
-    seeFile: 'resources/fonts/ark-pixel/OFL.txt',
   });
   return {
     formatVersion: 1,
@@ -185,7 +174,6 @@ export function ffmpegNoticeLines(file: ThirdPartyFile, target: NoticesTarget): 
 /** 许可是否合规：FFmpeg 是唯一允许的 LGPL（独立进程，9.8）；其余按 check-licenses 的允许列表 */
 export function entryAllowed(e: ThirdPartyEntry): boolean {
   if (e.kind === 'binary') return e.name === 'FFmpeg' && e.license === 'LGPL-3.0-or-later';
-  if (e.kind === 'font') return e.license === 'OFL-1.1' || isLicenseAllowed(e.license, e.name);
   return isLicenseAllowed(e.license, e.name);
 }
 

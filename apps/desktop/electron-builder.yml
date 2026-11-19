@@ -18,12 +18,6 @@ asar: true
 # FFmpeg 作为独立的可执行文件随包分发（05-export.md 5.6、09-compliance.md 9.9），附 LGPL 许可全文和构建来源。
 # 来自 pnpm ffmpeg:fetch，按平台放在 win.extraResources、mac.extraResources 里；ffprobe 只给测试用，不进安装包。
 extraResources:
-  # 没有原版层时文字的兜底像素字体（方舟像素字体，OFL-1.1），原样分发并附许可全文（docs/decisions.md M2b）
-  - from: ../../resources/fonts
-    to: fonts
-    filter:
-      - ark-pixel/*.bdf
-      - ark-pixel/OFL.txt
   # 内置模板包（pnpm templates:build 的产物，docs/04-templates.md 4.9）：应用把它当作只读的模板来源
   - from: ../../resources/templates
     to: templates

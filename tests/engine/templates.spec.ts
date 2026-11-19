@@ -9,7 +9,9 @@ import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { decodePng, encodePng } from '../../scripts/mascot-bake/png';
 import { TemplateManifestSchema, type FrameQuality, type TemplateManifest } from '../../packages/template-sdk/src/index';
+import { builtinId, ORIGINAL_BUILTIN_NAMES, TEST_SKIN_REF } from '../fixtures/builtin-template-names';
 import type { Harness } from './harness/harness';
+import { catalogIds } from '../fixtures/builtin-catalog';
 import { prng, randomParamSets } from './random-params';
 import { isSoftwareRenderer } from './software';
 
@@ -29,7 +31,8 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
   await page.waitForFunction(() => window.harnessReady === true);
   const raw = await call('builtins');
-  builtins = Object.fromEntries(Object.entries(raw).map(([id, m]) => [id, TemplateManifestSchema.parse(m)]));
+  expect(Object.keys(raw).sort()).toEqual(catalogIds);
+  builtins = Object.fromEntries(ORIGINAL_BUILTIN_NAMES.map(builtinId).map((id) => [id, TemplateManifestSchema.parse(raw[id])]));
 });
 
 test.afterAll(async () => {
@@ -67,12 +70,11 @@ function reportCut(where: string, width: number, height: number, cut: { min: num
   console.log(`[cut<255] ${where} ${width}x${height} below=${cut.below} min=${cut.min} samples(x,y,a)=${JSON.stringify(cut.samples)}`);
 }
 
-test('T-TPL-3 每个内置模板、三种画幅、默认参数：无警告，通过 T-ENG-1，首末帧全透明，剪辑点完全不透明', async () => {
+test('T-TPL-3 T1–T6、三种画幅、默认参数：无警告，通过 T-ENG-1，首末帧全透明，剪辑点完全不透明', async () => {
   const rules = await rendererRules();
   // WARP 上同样的工作量慢二三十倍
   test.setTimeout(rules.software ? 3_600_000 : 600_000);
   test.info().annotations.push({ type: 'renderer', description: rules.gpu });
-  expect(Object.keys(builtins).length).toBeGreaterThan(0);
   for (const [id, manifest] of Object.entries(builtins)) {
     for (const a of ASPECTS) {
       const r = await call('tplCheck', id, { width: a.width, height: a.height, fps: 60 }, STANDARD, {}, true);
@@ -98,7 +100,7 @@ test('T-TPL-3 每个内置模板、三种画幅、默认参数：无警告，通
   }
 });
 
-test('T-TPL-4 每个内置模板 50 组随机合法参数：不抛错，三条断言仍成立，duration 在规定范围内', async () => {
+test('T-TPL-4 T1–T6 各 50 组随机合法参数：不抛错，三条断言仍成立，duration 在规定范围内', async () => {
   const rules = await rendererRules();
   test.setTimeout(rules.software ? 3_600_000 : 1_800_000);
   test.info().annotations.push({ type: 'renderer', description: rules.gpu });
@@ -126,6 +128,20 @@ test('T-TPL-4 每个内置模板 50 组随机合法参数：不抛错，三条�
   }
 });
 
+test('T-SKIN-4 私有工作台素材：默认透明，生成皮肤的两种视角均可渲染且乱序一致', async () => {
+  const empty = await call('probeStudioPlayer', {});
+  expect(empty.warnings).toEqual([]);
+  expect(empty.deterministic).toBeNull();
+  expect([empty.maxAlpha, empty.distinct]).toEqual([0, 1]);
+  for (const view of ['first', 'third']) {
+    const rendered = await call('probeStudioPlayer', { skin: TEST_SKIN_REF, view });
+    expect(rendered.warnings, view).toEqual([]);
+    expect(rendered.deterministic, view).toBeNull();
+    expect(rendered.maxAlpha, view).toBeGreaterThan(0);
+    expect(rendered.distinct, view).toBeGreaterThan(1);
+  }
+});
+
 const KEY_FRAMES = ['p0', 'p25', 'cut', 'p75', 'p100'] as const;
 const BASELINE_SIZES = [
   { name: '16x9', width: 640, height: 360 },
@@ -133,7 +149,7 @@ const BASELINE_SIZES = [
   { name: '1x1', width: 480, height: 480 },
 ] as const;
 
-test('T-TPL-5 每个内置模板 0%、25%、cutTime、75%、100% 五帧与基准图比较：平均绝对误差 ≤ 1.5/255（软件渲染 4/255）', async () => {
+test('T-TPL-5 T1–T6 0%、25%、cutTime、75%、100% 五帧与基准图比较：平均绝对误差 ≤ 1.5/255（软件渲染 4/255）', async () => {
   test.setTimeout(300_000);
   const gpu = await call('gpu');
   const software = isSoftwareRenderer(gpu);

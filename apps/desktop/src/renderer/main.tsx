@@ -7,9 +7,13 @@ import { installGlobalErrorLogging } from './app/diagnostics';
 import { ErrorBoundary } from './app/ErrorBoundary';
 import { hasWebGL2, NoWebGL } from './app/NoWebGL';
 import { registerCore } from './app/core';
+import { installMacMenuState } from './app/mainCommands';
+import { setTitlebarPlatform } from './app/titlebarChrome';
 import { applyThemeToDocument } from './app/useThemeSync';
 import { initI18n, resolveLanguage, setSystemLocale } from './i18n';
 import { loadInitialTemplate } from './features/templates/actions';
+import { runCommand } from './features/commands/commands';
+import { installCodeInspector } from './features/live-code/host';
 import { installTestHooks } from './test-hooks';
 import { previewAudio } from './audio/app-audio';
 import { startSoundLibrary } from './audio/sound-library';
@@ -40,6 +44,9 @@ async function bootstrap(): Promise<void> {
 
   // 模板列表与默认模板（内置的旗舰模板）。预览引擎等 projectStore 里有了模板再装载
   const webgl2 = hasWebGL2();
+  setTitlebarPlatform(info.platform);
+  if (webgl2) installCodeInspector(() => runCommand('showAuthoringTools'));
+  if (webgl2 && info.platform === 'darwin') installMacMenuState();
   const initial = webgl2 ? loadInitialTemplate(language).catch((error: unknown) => console.error('[templates] initial load failed', error)) : Promise.resolve();
 
   // 设置可能在别处被改（以后的设置对话框、测试），以主进程推来的为准

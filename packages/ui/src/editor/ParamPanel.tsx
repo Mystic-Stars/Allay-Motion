@@ -1,4 +1,4 @@
-import { localize, sameValue, type LocalizedString, type ParamDef, type ParamValue, type ParamValues } from '@allay/template-sdk';
+import { isParamVisible, localize, sameValue, type LocalizedString, type ParamDef, type ParamValue, type ParamValues } from '@allay/template-sdk';
 import { ArrowCounterClockwise, CaretRight } from '@phosphor-icons/react';
 import { cn } from 'cn';
 import { memo, useCallback, type ReactNode } from 'react';
@@ -31,8 +31,10 @@ export interface ParamPanelProps {
   defs: readonly ParamDef[];
   groups?: readonly ParamGroupDef[];
   hidden?: readonly string[];
+  matchingKeys?: ReadonlySet<string>;
   values: ParamValues;
   defaults: ParamValues;
+  readOnlyDurations?: Readonly<Record<string, number>>;
   onChange(key: string, value: ParamValue): void;
   /** 分组折叠状态（按模板记忆）；没有记录的用 manifest 的 collapsed */
   collapsed: Readonly<Record<string, boolean>>;
@@ -44,15 +46,7 @@ export interface ParamPanelProps {
 }
 
 /** visibleWhen 只做界面显隐（4.4） */
-export function isVisible(def: ParamDef, values: ParamValues): boolean {
-  const w = def.visibleWhen;
-  if (!w) return true;
-  const v = values[w.key];
-  if (w.equals !== undefined && !sameValue(v, w.equals)) return false;
-  if (w.in !== undefined && !w.in.some((x) => sameValue(v, x))) return false;
-  if (w.not !== undefined && sameValue(v, w.not)) return false;
-  return true;
-}
+export const isVisible = isParamVisible;
 
 function enumOptions(def: Extract<ParamDef, { type: 'enum' }>, locale: string): EnumOption[] {
   return def.options.map((o) => ({ value: o.value, label: localize(o.label, locale), pattern: o.pattern }));
@@ -91,6 +85,8 @@ function ParamControl({ def, value, onChange, label, fileNames }: { def: ParamDe
       return <BlockListField value={value as unknown as BlockListEntry[]} onChange={(v) => onChange(v as unknown as ParamValue)} max={def.max} label={label} testId={testId} />;
     case 'texture':
       return <TextureField value={value as string} onChange={onChange} allowFile={def.allowFile} fileNames={fileNames} label={label} testId={testId} />;
+    case 'font':
+      return editor.renderFont?.({ value: value as string, onChange, label, testId }) ?? null;
     case 'sound':
       return <SoundField value={value as string | null} onChange={onChange} label={label} testId={testId} />;
     case 'easing':
@@ -262,11 +258,11 @@ function DurationGroup({ defs, values, defaults, onChange, clipboard, fileNames 
   );
 }
 
-export function ParamGroup({ id, title, extra, collapsed, onToggle, children }: { id: string; title: string; extra?: ReactNode; collapsed: boolean; onToggle(collapsed: boolean): void; children: ReactNode }) {
+export function ParamGroup({ id, title, extra, collapsed, onToggle, children }: { id: string; title: string; extra?: ReactNode; collapsed: boolean; onToggle?(collapsed: boolean): void; children: ReactNode }) {
   return (
-    <Collapsible open={!collapsed} onOpenChange={(open) => onToggle(!open)} className="border-t border-divider px-3.5 pt-2.5 pb-3">
+    <Collapsible open={!collapsed} onOpenChange={(open) => onToggle?.(!open)} className="border-t border-divider px-3.5 pt-2.5 pb-3">
       <div className="flex h-6 items-center gap-1.5">
-        <CollapsibleTrigger data-testid={`param-group-${id}`} className="group flex min-w-0 items-center gap-1.5 rounded-sm text-left font-semibold text-foreground">
+        <CollapsibleTrigger disabled={!onToggle} data-testid={`param-group-${id}`} className="group flex min-w-0 items-center gap-1.5 rounded-sm text-left font-semibold text-foreground">
           <CaretRight size={ICON.xs - 1} weight={ICON_WEIGHT.active} className="shrink-0 text-fg-subtle transition-transform duration-(--dur-2) group-data-[panel-open]:rotate-90" aria-hidden="true" />
           <span className="truncate">{title}</span>
         </CollapsibleTrigger>
@@ -277,30 +273,43 @@ export function ParamGroup({ id, title, extra, collapsed, onToggle, children }: 
   );
 }
 
-export function ParamPanel({ defs, groups = [], hidden = [], values, defaults, onChange, collapsed, onToggleGroup, fileNames = {}, clipboard }: ParamPanelProps) {
+export function ParamPanel({ defs, groups = [], hidden = [], matchingKeys, values, defaults, readOnlyDurations, onChange, collapsed, onToggleGroup, fileNames = {}, clipboard }: ParamPanelProps) {
   const editor = useEditor();
   const shown = defs.filter((d) => !hidden.includes(d.key) && isVisible(d, values));
-  const row = (d: ParamDef) => (
-    <ParamRow key={d.key} def={d} value={values[d.key] ?? defaults[d.key] ?? null} defaultValue={defaults[d.key] ?? null} onChange={onChange} fileNames={fileNames} clipboard={clipboard} />
-  );
+  const row = (def: ParamDef) => {
+    const duration = def.type === 'duration' ? readOnlyDurations?.[def.key] : undefined;
+    if (duration !== undefined) {
+      const label = localize(def.label, editor.locale);
+      return <div key={def.key} data-testid={`param-row-${def.key}`} className="grid min-h-row grid-cols-[minmax(72px,30%)_1fr] items-center gap-2.5 text-fg-muted">
+        <span className="truncate" title={label} data-testid={`param-label-${def.key}`}>{label}</span>
+        <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 num text-sm" data-testid={`param-${def.key}`}>
+          <output aria-label={label}>{duration.toFixed(3).replace(/0$/, '')} s</output>
+          <span className="shrink-0 text-xs text-fg-subtle">{editor.t('duration.frames', { n: Math.round(duration * editor.fps) })}</span>
+        </div>
+      </div>;
+    }
+    return <ParamRow key={def.key} def={def} value={values[def.key] ?? defaults[def.key] ?? null} defaultValue={defaults[def.key] ?? null} onChange={onChange} fileNames={fileNames} clipboard={clipboard} />;
+  };
   const known = new Set(groups.map((g) => g.key));
-  const loose = shown.filter((d) => !d.group || !known.has(d.group));
+  const matches = (def: ParamDef) => !matchingKeys || matchingKeys.has(def.key);
+  const loose = shown.filter((def) => (!def.group || !known.has(def.group)) && matches(def));
   return (
     <div className="flex flex-col" data-testid="param-panel">
       {loose.length > 0 && <div className="border-t border-divider px-3.5 py-2">{loose.map(row)}</div>}
       {groups.map((g) => {
-        const rows = shown.filter((d) => d.group === g.key);
+        const groupRows = shown.filter((def) => def.group === g.key);
+        const rows = groupRows.filter(matches);
         if (rows.length === 0) return null;
-        const durations = rows.length <= 3 && rows.every((d) => d.type === 'duration');
-        const total = durations ? Math.round(rows.reduce((a, d) => a + ((values[d.key] ?? defaults[d.key]) as number), 0) * editor.fps) : 0;
+        const durations = groupRows.length <= 3 && groupRows.every((def) => def.type === 'duration' && readOnlyDurations?.[def.key] === undefined);
+        const total = durations ? Math.round(groupRows.reduce((sum, def) => sum + ((values[def.key] ?? defaults[def.key]) as number), 0) * editor.fps) : 0;
         return (
           <ParamGroup
             key={g.key}
             id={g.key}
             title={localize(g.label, editor.locale)}
             extra={durations ? <span className="num">{editor.t('duration.total', { n: total })}</span> : undefined}
-            collapsed={collapsed[g.key] ?? g.collapsed ?? false}
-            onToggle={(c) => onToggleGroup(g.key, c)}
+            collapsed={!matchingKeys && (collapsed[g.key] ?? g.collapsed ?? false)}
+            {...(!matchingKeys && { onToggle: (next: boolean) => onToggleGroup(g.key, next) })}
           >
             {durations ? <DurationGroup defs={rows} values={values} defaults={defaults} onChange={onChange} clipboard={clipboard} fileNames={fileNames} /> : rows.map(row)}
           </ParamGroup>

@@ -3,14 +3,12 @@
 // 桌面版渲染进程只通过 window.allay 和宿主打交道（docs/01-product-architecture.md 1.4、1.8），
 // 所以把这一个对象换掉，界面、引擎 Worker、内置模板就都是桌面版的同一份代码。这里只实现宿主层：
 // - 模板：构建时打包好的内置模板（templates.ts），和桌面版主进程读 .allaytpl 得到的数据相同；
-// - 资源：官网专用的原版贴图（mc-pack.ts，从本机正版游戏提取），缺的贴图退回页面里现场生成的纯色色块（demo-pack.ts）；
-//   文字的兜底字体是仓库里的像素字体；
+// - 资源：只返回官网索引中实际可读的字节。缺图返回 null，与桌面共用引擎末级占位；
+//   无可用字形时由共享引擎使用系统字体；
 // - 设置、预设、缩略图缓存：只在内存里，关掉页面就没了；
 // - 导出：真实的导出 Worker 照常逐帧渲染，帧交到这里后直接丢弃（浏览器里没有 FFmpeg），结束时通知落地页；
 // - 文件、工程、资源包、游戏目录这类需要本机文件系统的操作：不做，通知落地页给出“下载桌面版”的引导。
 // 这里不发任何网络请求（AGENTS.md 硬性规则 10）。
-import { type BitmapFontTables } from '@allay/assets';
-import { z } from 'zod';
 import type { AllayApi } from '../../../desktop/src/preload/api';
 import { EXPORT_PRESETS, type ExportPreset, type FfmpegInfo, type H264Probe, type PresetBlocker } from '../../../desktop/src/shared/export';
 import type { ResourceState } from '../../../desktop/src/shared/resources';
@@ -19,15 +17,11 @@ import type { PresetEntry } from '../../../desktop/src/shared/templates';
 import { resolveUpdateSource, type UpdateState } from '../../../desktop/src/shared/updates';
 import desktopPackage from '../../../desktop/package.json';
 import type { DesktopOnlyFeature, SiteLanguage } from './bridge';
-import { demoTexture } from './demo-pack';
 import { mcGameVersion, mcTexture } from './mc-pack';
-import { PIXEL_FONT_PATH } from './paths';
 import { builtinBundle, builtinEntries } from './templates';
 
 /** 宿主里给人看的几句话（文案在官网的语言文件里，由调用方传入） */
 export interface HostMessages {
-  demoPackName: Record<SiteLanguage, string>;
-  demoPackDescription: Record<SiteLanguage, string>;
   /** 原版贴图层的名字，{{version}} 换成游戏版本 */
   mcPackName: Record<SiteLanguage, string>;
   mcPackDescription: Record<SiteLanguage, string>;
@@ -49,7 +43,6 @@ export interface BrowserHostOptions {
 
 /** 资源栈指纹：固定值（这一层构建后不会变），格式与主进程相同（16 位十六进制）；有没有原版贴图是两个不同的栈 */
 const STAMP = mcGameVersion ? '0eb5de00000000a2' : '0eb5de0000000001';
-const DEMO_LAYER_ID = 'web-demo';
 const MC_LAYER_ID = 'web-mc';
 
 type Listener<T> = (value: T) => void;
@@ -76,55 +69,6 @@ function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-let fontTables: Promise<BitmapFontTables | null> | null = null;
-/** Worker 交回来的结果（线程之间的边界照样过 schema） */
-const FontReplySchema = z.union([
-  z.object({
-    ok: z.literal(true),
-    tables: z.object({
-      ascent: z.number(),
-      descent: z.number(),
-      codepoints: z.instanceof(Uint32Array),
-      metrics: z.instanceof(Int16Array),
-      offsets: z.instanceof(Uint32Array),
-      bits: z.instanceof(Uint8Array),
-    }),
-  }),
-  z.object({ ok: z.literal(false), error: z.string() }),
-]);
-
-/** 下载、解压、解析都在 pixel-font.worker.ts 里做：3.6 MB 的 BDF 在主线程上解析会让首屏预览掉帧 */
-function loadPixelFont(): Promise<BitmapFontTables> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./pixel-font.worker.ts', import.meta.url), { type: 'module', name: 'pixel-font' });
-    worker.addEventListener('message', (event: MessageEvent<unknown>) => {
-      worker.terminate();
-      const reply = FontReplySchema.safeParse(event.data);
-      if (!reply.success) reject(new Error('pixel font worker sent an unreadable reply'));
-      else if (reply.data.ok) resolve(reply.data.tables);
-      else reject(new Error(reply.data.error));
-    });
-    worker.addEventListener('error', (event) => {
-      worker.terminate();
-      reject(new Error(event.message || 'pixel font worker failed'));
-    });
-    worker.postMessage(new URL(PIXEL_FONT_PATH, document.baseURI).href);
-  });
-}
-
-/**
- * 兜底像素字体（方舟像素字体，OFL-1.1，仓库里已登记来源）：一个单独的字体文件，
- * 只在引擎第一次要它（带文字的模板）时才下载，不在首屏的关键路径上。
- */
-function fallbackFont(): Promise<BitmapFontTables | null> {
-  fontTables ??= loadPixelFont()
-    .catch((error: unknown) => {
-      console.warn('[web-host] fallback font unavailable', error);
-      return null;
-    });
-  return fontTables;
-}
-
 export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; applySettings(patch: UiSettingsPatch): void } {
   // 网页里默认静音（访客没点过任何东西就出声不礼貌）；用户可以在界面里打开
   let settings: UiSettings = { ...defaultUiSettings(), ...opts.settings };
@@ -145,6 +89,7 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
   const updateState = (): UpdateState => ({
     status: 'unsupported',
     currentVersion: desktopPackage.version,
+    channel: settings.updates.channel,
     preferredSource: resolveUpdateSource(settings.updates.source, Intl.DateTimeFormat().resolvedOptions().timeZone),
     latest: null,
     progress: null,
@@ -159,34 +104,22 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
       stamp: STAMP,
       layers: [
         { id: 'builtin', kind: 'builtin', name: 'builtin', enabled: true, legacyFormat: false, warnings: [], empty: true },
-        // 有提取好的原版贴图（官网专用，见 mc-pack.ts）就用它；没有时用页面里生成的纯色色块
-        mcGameVersion
-          ? {
+        ...(mcGameVersion ? [{
               id: MC_LAYER_ID,
-              kind: 'pack',
+              kind: 'pack' as const,
               name: opts.messages.mcPackName[lang].replace('{{version}}', mcGameVersion),
               description: opts.messages.mcPackDescription[lang],
               enabled: true,
               legacyFormat: false,
               warnings: [],
-              source: 'folder',
-            }
-          : {
-              id: DEMO_LAYER_ID,
-              kind: 'pack',
-              name: opts.messages.demoPackName[lang],
-              description: opts.messages.demoPackDescription[lang],
-              enabled: true,
-              legacyFormat: false,
-              warnings: [],
-              source: 'folder',
-            },
+              source: 'folder' as const,
+            }] : []),
       ],
       brokenPacks: [],
       vanilla: { consent: false, enabled: false, local: null, cached: null, active: null, problem: null },
       download: { status: 'idle' },
       detecting: false,
-      hasAssets: true,
+      hasAssets: Boolean(mcGameVersion),
     };
   };
 
@@ -211,6 +144,7 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
   };
 
   const api: AllayApi = {
+    // 不提供 codeInspector：浏览器不能打开原生的独立代码窗。
     app: {
       info: async () => ({
         version: desktopPackage.version,
@@ -232,6 +166,18 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
       // 标题栏的系统按钮由仿真器自己画，颜色直接用设计变量，这里不用记
       setTitleBarColors: async () => undefined,
       reload: async () => window.location.reload(),
+    },
+    sound: {
+      pick: async () => {
+        desktopOnly('files');
+        return null;
+      },
+      list: async () => [],
+      read: async () => null,
+      fetchNames: async () => undefined,
+    },
+    fonts: {
+      list: async () => ({ resources: [] }),
     },
     files: {
       pickImage: async () => {
@@ -281,19 +227,21 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
       layers: async () => resourceState(),
       stamp: async () => STAMP,
       read: async () => null,
-      readTexture: async (id) => {
-        const vanilla = await mcTexture(id);
-        if (vanilla) return vanilla;
-        const png = await demoTexture(id);
-        return png ? { png, mcmeta: null } : null;
+      readTexture: async (id, profileId) => {
+        if (profileId !== undefined) return null;
+        return mcTexture(id);
       },
       soundVariants: async () => null,
       soundLibrary: async () => ({ stamp: STAMP, events: [] }),
       soundFiles: async (files) => ({ ok: true, states: Object.fromEntries(files.map((f) => [f, 'missing' as const])) }),
       list: async () => [],
       fontProviders: async () => null,
-      fallbackFont: () => fallbackFont(),
       detectMinecraft: async () => resourceState(),
+      selectProfile: async () => resourceState(),
+      officialVersions: async () => [],
+      locateProfile: async () => false,
+      instancePacks: async () => [],
+      setInstancePack: async () => resourceState(),
       setVanilla: async () => {
         desktopOnly('vanilla');
         return resourceState();
@@ -322,6 +270,13 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
       onChanged: (cb) => resourcesChanged.on(cb),
     },
     templates: {
+      readSource: async () => ({ ok: false, error: 'not-user' }),
+      writeSource: async () => ({ ok: false, error: 'not-user' }),
+      createBlank: async () => { desktopOnly('templates'); return null; },
+      freezeComposition: async () => { desktopOnly('templates'); return { canceled: true }; },
+      importComposition: async () => { desktopOnly('templates'); return { canceled: true }; },
+      listCompositions: async () => [],
+      openComposition: async () => ({ ok: false, error: 'desktop-only' }),
       list: async () => builtinEntries(),
       read: async (id, version) => builtinBundle(id, version),
       // 内置模板都没有 assets/（构建时 build-templates 会把它们打进 .allaytpl，官网暂不需要）
@@ -432,7 +387,17 @@ export function createBrowserHost(opts: BrowserHostOptions): { api: AllayApi; ap
     cache: {
       getThumb: async (stamp, key) => thumbs.get(`${stamp}/${key}`)?.slice() ?? null,
       putThumb: async (stamp, key, png) => {
-        thumbs.set(`${stamp}/${key}`, png.slice());
+        const limit = 24 * 1024 * 1024;
+        if (png.byteLength > limit) return;
+        const ref = `${stamp}/${key}`;
+        thumbs.delete(ref);
+        let bytes = png.byteLength + [...thumbs.values()].reduce((size, value) => size + value.byteLength, 0);
+        for (const [old, value] of thumbs) {
+          if (bytes <= limit && thumbs.size < 256) break;
+          bytes -= value.byteLength;
+          thumbs.delete(old);
+        }
+        thumbs.set(ref, png.slice());
       },
       clear: async () => thumbs.clear(),
       usage: async () => ({ files: thumbs.size, bytes: [...thumbs.values()].reduce((n, b) => n + b.byteLength, 0) }),

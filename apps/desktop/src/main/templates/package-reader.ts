@@ -64,7 +64,7 @@ export async function readPackage(file: string, options: ReadPackageOptions): Pr
 
   let archive;
   try {
-    archive = await openZip(file, { maxEntryBytes: MAX_PACKAGE_ENTRY_BYTES, maxEntries: MAX_PACKAGE_ENTRIES });
+    archive = await openZip(file, { maxEntryBytes: MAX_PACKAGE_ENTRY_BYTES, maxEntries: MAX_PACKAGE_ENTRIES, rejectLinks: true });
   } catch (error) {
     if (error instanceof ZipRejectedError) {
       // zip.ts 对不安全的条目名整包拒绝；yauzl 自己发现的 .. 和绝对路径也在这里

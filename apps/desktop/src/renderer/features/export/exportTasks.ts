@@ -91,6 +91,11 @@ export const useExportTasks = create<ExportTaskState>(() => ({ tasks: {}, active
 
 const runs = new Map<string, { run: ExportRun; finished: Promise<void> }>();
 
+function blockUnload(event: BeforeUnloadEvent): void {
+  event.preventDefault();
+  event.returnValue = false;
+}
+
 function patch(id: string, next: Partial<ExportTaskSnapshot>): void {
   const s = useExportTasks.getState();
   const cur = s.tasks[id];
@@ -115,14 +120,15 @@ function finishedOutcome(id: string, outcome: ExportOutcome): void {
   const tasks = { ...s.tasks };
   for (const k of drop) delete tasks[k];
   useExportTasks.setState({ tasks, activeId: s.activeId === id ? null : s.activeId });
+  window.removeEventListener('beforeunload', blockUnload);
   useUiStore.getState().setExporting(false);
 }
 
 /** 按 5.2 的规则生成的文件名（不含扩展名） */
 export function defaultFileName(): string {
-  const { template, output, name } = useProjectStore.getState();
-  const templateName = template ? localized(template.manifest.name, i18next.language) : 'template';
-  return exportBaseName(name ?? i18next.t('project.untitled'), templateName, output.width, output.height, output.fps);
+  const { template, output, name, composition } = useProjectStore.getState();
+  const templateName = !composition && template ? localized(template.manifest.name, i18next.language) : 'timeline';
+  return exportBaseName(name ?? i18next.t('project.untitled'), templateName, output.width, output.height, composition?.fps ?? output.fps);
 }
 
 export function exportTaskActive(): boolean {
@@ -133,8 +139,9 @@ export function exportTaskActive(): boolean {
 export function startExportTask(input: ExportTaskStartInput): string {
   if (exportTaskActive()) throw new Error('an export is already running');
   const project = useProjectStore.getState();
-  const { template, params, output } = project;
-  if (!template) throw new Error('no template');
+  const { template, params, composition } = project;
+  if (!template && !composition) throw new Error('no template');
+  const output = { ...project.output, fps: composition?.fps ?? project.output.fps };
   const saved = project.exportSettings;
   const preset: ExportPreset = input?.preset ?? saved.preset;
   const quality = input?.quality ?? saved.quality;
@@ -154,13 +161,14 @@ export function startExportTask(input: ExportTaskStartInput): string {
     result: null,
     error: null,
   };
+  const run = new ExportRun({ template, params, composition, output, preset, quality, shutterAngle, key, suggestedName: fileName }, (p: ExportProgress) =>
+    patch(id, { status: p.stage, written: p.written, total: p.total, progress: p.total > 0 ? p.written / p.total : 0, etaSeconds: p.etaSeconds }),
+  );
+  window.addEventListener('beforeunload', blockUnload);
   useExportTasks.setState((s) => ({ tasks: { ...s.tasks, [id]: snapshot }, activeId: id }));
   useUiStore.getState().setExporting(true);
   // 导出是模态的：预览停下来
   useTransportStore.getState().setPlaying(false);
-  const run = new ExportRun({ template, params, output, preset, quality, shutterAngle, key, suggestedName: fileName }, (p: ExportProgress) =>
-    patch(id, { status: p.stage, written: p.written, total: p.total, progress: p.total > 0 ? p.written / p.total : 0, etaSeconds: p.etaSeconds }),
-  );
   const finished = run.run().then(
     (outcome) => finishedOutcome(id, outcome),
     (error: unknown) => finishedOutcome(id, { kind: 'failed', error: { code: 'template-failed', detail: String(error) }, frame: null }),

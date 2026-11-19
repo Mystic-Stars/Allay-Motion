@@ -9,6 +9,8 @@ import { EXAMPLE_DIR, generateAll, OUTPUTS } from '../../scripts/gen-template-ap
 import { TEMPLATE_JSCONFIG } from '../../apps/desktop/src/shared/template-dev';
 import { analyzeTemplateCode } from '../../apps/desktop/src/shared/template-code';
 import { parseManifest } from '../../packages/template-sdk/src/index';
+import { catalogNames } from '../fixtures/builtin-catalog';
+import { builtinId } from '../fixtures/builtin-template-names';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DTS = OUTPUTS.dts;
@@ -93,13 +95,23 @@ describe('T-DEV-3 模板接口的类型定义与编写指南', () => {
     expect(api.easings).toContain('cubicInOut');
   });
 
-  it('用生成的 d.ts 对六个内置模板打包前的源码做类型检查（与 tsconfig.base 一样严格），通过', () => {
+  it('用生成的 d.ts 严格检查原有六款和两个工作台模板的源码', () => {
     const dir = join(ROOT, 'packages/templates');
-    const sources = readdirSync(dir, { withFileTypes: true })
+    const templates = readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && existsSync(join(dir, d.name, 'manifest.json')))
-      .flatMap((d) => readdirSync(join(dir, d.name, 'src')).map((f) => join(dir, d.name, 'src', f)))
+      .map((d) => d.name);
+    expect(templates.sort()).toEqual(catalogNames);
+    for (const name of catalogNames) {
+      expect(JSON.parse(readFileSync(join(dir, name, 'manifest.json'), 'utf8'))).toMatchObject({ id: builtinId(name) });
+    }
+    const sources = templates
+      .flatMap((name) => {
+        const src = join(dir, name, 'src');
+        const files = readdirSync(src);
+        expect(files, name).toContain('index.ts');
+        return files.map((file) => join(src, file));
+      })
       .filter((f) => f.endsWith('.ts'));
-    expect(sources.filter((f) => f.endsWith('index.ts'))).toHaveLength(6);
     // 模板源码的 @allay/template-sdk 指向生成的 d.ts；types 为空，看不到 @types/three
     const diagnostics = typecheck(sources, { ...STRICT, paths: { '@allay/template-sdk': [DTS_MODULE] } });
     expect(diagnostics).toEqual([]);

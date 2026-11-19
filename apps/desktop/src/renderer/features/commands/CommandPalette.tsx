@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PresetEntry } from '../../../shared/templates';
 import { useTemplateStore } from '../../stores/templateStore';
+import { useProjectStore } from '../../stores/projectStore';
 import { useUiStore } from '../../stores/uiStore';
 import { selectTemplate } from '../templates/actions';
 import { applyPresetEntry } from '../templates/presets';
@@ -19,6 +20,7 @@ import { shortcutLabel, shortcutMap } from './shortcutState';
 export function CommandPalette() {
   const { t, i18n } = useTranslation();
   const entries = useTemplateStore((s) => s.entries);
+  const composing = useProjectStore((s) => s.composition !== null);
   const commands = useCommands();
   const overrides = useUiStore((s) => s.settings.shortcuts);
   const keys = new Map([...shortcutMap(commands, overrides).byKey].map(([k, id]) => [id, k]));
@@ -58,7 +60,7 @@ export function CommandPalette() {
                 );
               })}
             </CommandGroup>
-            <CommandGroup heading={t('command.groups.templates')}>
+            {!composing && <CommandGroup heading={t('command.groups.templates')}>
               {entries
                 .filter((e) => !e.baseMissing)
                 .map((e) => {
@@ -71,8 +73,8 @@ export function CommandPalette() {
                     </CommandItem>
                   );
                 })}
-            </CommandGroup>
-            {presets.length > 0 && (
+            </CommandGroup>}
+            {!composing && presets.length > 0 && (
               <CommandGroup heading={t('command.groups.presets')}>
                 {presets.map((p) => (
                   <CommandItem key={p.id} value={`preset ${p.name} ${p.id}`} onSelect={() => run(() => void applyPresetEntry(p, i18n.language))}>

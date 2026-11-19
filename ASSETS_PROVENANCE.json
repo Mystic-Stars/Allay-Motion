@@ -14,14 +14,6 @@
     "note": "T-TPL-5 的渲染基准图：内置模板用测试脚本生成的纯色假资源栈渲染（不含任何原版贴图），只给测试用，不进安装包。基准图在真实显卡上生成，不同显卡的输出不逐字节相同，所以不做逐字节比对（docs/decisions.md M3）"
   },
   {
-    "path": "resources/fonts/ark-pixel/*.bdf",
-    "origin": "third-party",
-    "source": "https://github.com/TakWolf/ark-pixel-font/releases/tag/2026.11.10",
-    "author": "TakWolf",
-    "license": "OFL-1.1",
-    "note": "方舟像素字体 12px 比例宽度 zh_hans 的 BDF，取自发布包 ark-pixel-font-12px-proportional-bdf-v2026.11.10.zip（sha256 f8f2880a…db7dfd），未做任何修改；许可全文 resources/fonts/ark-pixel/OFL.txt 同包附带。没有原版层时文字的兜底字形（docs/decisions.md M2b）"
-  },
-  {
     "path": "tests/fixtures/ui-baselines/*.png",
     "origin": "rendered",
     "generator": "pnpm test:e2e:baselines",

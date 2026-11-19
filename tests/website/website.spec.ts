@@ -1,11 +1,12 @@
 // 官网的冒烟测试（T-WEB-*，docs/decisions.md 官网）。在 Electron 自带的 Chromium 里打开 vite preview 起的构建产物，窗口不显示。
 // 仿真器 iframe 带 ?e2e，里面装着桌面版同一套测试钩子（window.__allayTest），用它读预览画布的像素。
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Frame, type Page } from '@playwright/test';
 import { brandMessages } from '../../packages/ui/src/brand/messages';
+import { catalogIds } from '../fixtures/builtin-catalog';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const ELECTRON = createRequire(join(ROOT, 'apps/desktop/package.json'))('electron') as string;
@@ -14,8 +15,7 @@ const SITE = 'http://localhost:4180/?e2e';
 const DISCLAIMER_EN = 'NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.';
 const DISCLAIMER_ZH = '本软件不是 Minecraft 官方产品，未经 Mojang 或 Microsoft 批准，也与它们无关。';
 
-/** packages/templates 下的内置模板个数（仿真器的模板库、预览的模板按钮要一个不少） */
-const TEMPLATE_COUNT = readdirSync(join(ROOT, 'packages/templates')).filter((d) => existsSync(join(ROOT, 'packages/templates', d, 'manifest.json'))).length;
+const TEMPLATE_COUNT = catalogIds.length;
 /** 落地页的模板一节只展示精选的前几个（apps/website/src/site/components/TemplatesSection.tsx 的 SHOWCASE_MAX） */
 const SHOWCASE_MAX = 5;
 const SHOWN = Math.min(TEMPLATE_COUNT, SHOWCASE_MAX);
@@ -111,10 +111,18 @@ test('T-WEB-1 页面能加载：首屏实时预览就绪，模板按钮一个不
   await expect(page.getByTestId('templates-more')).toHaveCount(1);
   await expect(page.getByTestId('live-chip')).toHaveCount(TEMPLATE_COUNT);
   await scrollThrough(page);
-  // 小格里的帧由封面服务渲染（不是截图）；精选的大格由引擎实时渲染（离开视口远了就销毁、退回封面的帧，所以这里至少 SHOWN − 1 个）
-  await expect.poll(() => page.getByTestId('template-sheet').count(), { timeout: 90_000 }).toBeGreaterThanOrEqual(SHOWN - 1);
   await page.evaluate(() => document.getElementById('templates')?.scrollIntoView({ behavior: 'instant' }));
   await expect(page.getByTestId('template-live')).toHaveAttribute('data-live', 'true', { timeout: 30_000 });
+  const second = page.getByTestId('template-card').nth(1);
+  await expect(second.locator('img')).toBeVisible({ timeout: 45_000 });
+  await page.mouse.move(0, 0);
+  await expect(page.getByTestId('template-sheet')).toHaveCount(0);
+  await second.hover();
+  await expect(second.getByTestId('template-sheet')).toBeVisible({ timeout: 45_000 });
+  await page.getByTestId('gallery-next').click();
+  await expect(page.getByTestId('template-card').first()).toHaveAttribute('data-template', 'allay.builtin.advancement-toast');
+  await expect(page.getByTestId('template-sheet')).toHaveCount(0);
+  await page.getByTestId('gallery-prev').click();
   // 用了官网专用的原版贴图时，页面上写明来源和版权（docs/decisions.md 官网 · 原版素材）
   const mcIndex = join(ROOT, 'apps/website/public/mc/index.json');
   if (existsSync(mcIndex)) {
@@ -138,7 +146,7 @@ test('T-WEB-2 仿真器挂载桌面版编辑器，预览画布由真实引擎渲
   expect(maxAlpha).toBeGreaterThan(0);
   // 模板库里也是全部内置模板
   const builtins = (await frame.evaluate(() => window.__allayTest!.templates())).filter((e) => e.source === 'builtin');
-  expect(builtins).toHaveLength(TEMPLATE_COUNT);
+  expect(builtins.map(entry => entry.id).sort()).toEqual(catalogIds);
 });
 
 test('T-WEB-11 仿真器进入视口就从剪辑点循环播放，画面不是空的；鼠标在预览区上滚轮，落地页照常滚动', async () => {
@@ -647,11 +655,14 @@ test('T-WEB-14 文案不强调模板数量；开发者三张真实头像都是�
   }
 });
 
-test('T-WEB-10 标题在任何情况下都很快可见：字体请求全部被拦、requestAnimationFrame 不跑（像后台标签页）', async () => {
+test('T-WEB-10 不请求文字字体，后台标签页里标题也很快可见', async () => {
   const bad = await launch();
   try {
     const { page } = bad;
-    await page.route(/\.woff2(\?|$)/, (r) => r.abort());
+    const fontRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.resourceType() === 'font' || /\.bdf(?:\.gz)?(?:\?|$)/i.test(request.url())) fontRequests.push(request.url());
+    });
     // 后台标签页里 requestAnimationFrame 不回调：出场动画走不动，盖层必须靠保底计时器撤掉
     await page.addInitScript(() => {
       window.requestAnimationFrame = () => 0;
@@ -672,11 +683,12 @@ test('T-WEB-10 标题在任何情况下都很快可见：字体请求全部被�
     const t0 = Date.now();
     await expect(page.locator('h1')).toBeVisible();
     await expect.poll(() => covered('h1'), { timeout: 2500 }).toBe(false);
-    test.info().annotations.push({ type: 'T-WEB-10', description: `首屏标题 ${Date.now() - t0} ms 内可见（字体被拦、rAF 不跑）` });
+    test.info().annotations.push({ type: 'T-WEB-10', description: `首屏标题 ${Date.now() - t0} ms 内可见（rAF 不跑）` });
     // 滚到页面中段的节标题也一样
     await page.evaluate(() => document.getElementById('features')?.scrollIntoView({ behavior: 'instant' }));
     await expect.poll(() => covered('#features h2'), { timeout: 3500 }).toBe(false);
-    expect(bad.errors.filter((e) => !/woff2|Failed to load resource|net::ERR_FAILED/.test(e))).toEqual([]);
+    expect(fontRequests).toEqual([]);
+    expect(bad.errors).toEqual([]);
   } finally {
     await closeSession(bad);
   }

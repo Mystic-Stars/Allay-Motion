@@ -177,7 +177,10 @@ export function installTestHooks(): void {
       return entry ? applyPresetEntry(entry, i18next.language) : false;
     },
     status: () => usePreviewStore.getState().status,
-    previewUpToDate: () => usePreviewStore.getState().status.kind === 'ready' && previewEngine.loadedProjectRevision === useProjectStore.getState().revision,
+    previewUpToDate: () => {
+      const { status, loaded } = usePreviewStore.getState();
+      return status.kind === 'ready' && loaded?.revision === useProjectStore.getState().revision && loaded.locale === i18next.language;
+    },
     workerGeneration: () => previewEngine.workerGeneration,
     transport: () => {
       const s = useTransportStore.getState();

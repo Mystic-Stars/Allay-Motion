@@ -3,6 +3,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from 'cn';
 import { DotsSixVertical, Package, Trash, Warning } from '@phosphor-icons/react';
+import type { ReactNode } from 'react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/misc';
 import { Switch } from '../components/ui/switch';
@@ -20,7 +21,7 @@ export interface StackRow {
   iconUrl: string | null;
   enabled: boolean;
   sortable: boolean;
-  /** 能不能关、能不能删 */
+  /** 能不能关；提供移除动作时也决定能不能删 */
   locked: boolean;
   toggleDisabled?: boolean;
   /** 一句问题说明（旧格式、跳过的文件等） */
@@ -32,11 +33,12 @@ export interface ResourceStackListProps {
   /** 资源包从上到下的新顺序 */
   onReorder(idsTopToBottom: string[]): void;
   onToggle(id: string, enabled: boolean): void;
-  onRemove(id: string): void;
+  onRemove?(id: string): void;
+  renderLabel?(row: StackRow): ReactNode;
   labels: { drag(name: string): string; toggle(name: string): string; remove(name: string): string };
 }
 
-function Row({ row, labels, onToggle, onRemove }: { row: StackRow } & Pick<ResourceStackListProps, 'labels' | 'onToggle' | 'onRemove'>) {
+function Row({ row, labels, onToggle, onRemove, renderLabel }: { row: StackRow } & Pick<ResourceStackListProps, 'labels' | 'onToggle' | 'onRemove' | 'renderLabel'>) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: row.id, disabled: !row.sortable });
   return (
     <li
@@ -66,16 +68,14 @@ function Row({ row, labels, onToggle, onRemove }: { row: StackRow } & Pick<Resou
         {row.iconUrl ? <img src={row.iconUrl} alt="" className="pixelated size-8" /> : <Package size={ICON.md} className="text-fg-subtle" aria-hidden="true" />}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm" title={row.name}>
-            {row.name}
-          </span>
-          <Badge className="shrink-0">{row.kindLabel}</Badge>
-        </div>
-        {row.description && (
-          <p className="truncate text-xs text-fg-subtle" title={row.description}>
-            {row.description}
-          </p>
+        {renderLabel?.(row) ?? (
+          <>
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-sm" title={row.name}>{row.name}</span>
+              <Badge className="shrink-0">{row.kindLabel}</Badge>
+            </div>
+            {row.description && <p className="truncate text-xs text-fg-subtle" title={row.description}>{row.description}</p>}
+          </>
         )}
         {row.warning && (
           <p className="flex items-center gap-1 text-xs text-warning" data-testid="layer-warning">
@@ -89,16 +89,16 @@ function Row({ row, labels, onToggle, onRemove }: { row: StackRow } & Pick<Resou
       {!row.locked && (
         <>
           <Switch checked={row.enabled} disabled={row.toggleDisabled} onCheckedChange={(v) => onToggle(row.id, v)} aria-label={labels.toggle(row.name)} data-testid="layer-toggle" className="mx-1" />
-          <Button variant="ghost" size="icon-sm" aria-label={labels.remove(row.name)} data-testid="layer-remove" onClick={() => onRemove(row.id)}>
+          {onRemove && <Button variant="ghost" size="icon-sm" aria-label={labels.remove(row.name)} data-testid="layer-remove" onClick={() => onRemove(row.id)}>
             <Trash size={ICON.md} />
-          </Button>
+          </Button>}
         </>
       )}
     </li>
   );
 }
 
-export function ResourceStackList({ rows, onReorder, onToggle, onRemove, labels }: ResourceStackListProps) {
+export function ResourceStackList({ rows, onReorder, onToggle, onRemove, renderLabel, labels }: ResourceStackListProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const sortableIds = rows.filter((r) => r.sortable).map((r) => r.id);
   const onDragEnd = (e: DragEndEvent) => {
@@ -114,7 +114,7 @@ export function ResourceStackList({ rows, onReorder, onToggle, onRemove, labels 
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <ul className="flex flex-col gap-1" data-testid="resource-stack-list">
           {rows.map((r) => (
-            <Row key={r.id} row={r} labels={labels} onToggle={onToggle} onRemove={onRemove} />
+            <Row key={r.id} row={r} labels={labels} onToggle={onToggle} onRemove={onRemove} renderLabel={renderLabel} />
           ))}
         </ul>
       </SortableContext>

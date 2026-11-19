@@ -10,7 +10,7 @@ import { downloadVanilla } from './actions';
 
 // 下载原版资源的进度（docs/06-ui-design.md 6.12）：整体进度条（按字节）、已下载 / 总大小、速度、剩余时间、
 // 当前在做什么，以及五个阶段各自的状态。失败、取消时指明停在哪一步，可以重试（已下载且校验通过的文件不会重下）。
-// 资源栈弹层、无素材引导、设置的“素材”页和首次启动引导都用这一个组件；引导里大一号，带悦灵（7.5、7.6 B）。
+// 设置的“素材”页和首次启动引导共用；引导里大一号，带悦灵（7.5、7.6 B）。
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -67,9 +67,9 @@ export function DownloadProgress({ state, size = 'compact', onRetry }: { state: 
   const p = state.progress;
   const done = state.status === 'done';
   const pct = formatPercent(p.fraction, done);
-  const stoppedAt = t(`resources.progress.stages.${p.stage}`);
+  const stoppedAt = t(`resources.progress.stages.${p.activity === 'panorama' ? 'panorama' : p.stage}`);
   const large = size === 'large';
-  const retry = onRetry ?? downloadVanilla;
+  const retry = onRetry ?? (() => downloadVanilla('requestedVersion' in state ? state.requestedVersion : undefined));
   const numbers = [
     p.total !== null ? t('resources.progress.bytes', { received: formatBytes(p.received), total: formatBytes(p.total) }) : null,
     state.status === 'running' && p.bytesPerSecond !== null ? t('resources.progress.speed', { speed: formatBytes(Math.round(p.bytesPerSecond)) }) : null,

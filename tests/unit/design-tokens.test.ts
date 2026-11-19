@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { THEME_CHROME_COLORS } from '../../apps/desktop/src/shared/theme-colors';
+import { splashFiles } from '../../apps/desktop/src/splash/generate';
 
 // 6.2 的设计变量原样写进了 packages/ui 的 globals.css；主进程用到的几个颜色和它一致。
 
@@ -94,9 +95,28 @@ describe('6.2 设计变量', () => {
     const shadows = [...css.matchAll(/(?:^|[;{\s])box-shadow:\s*([^;]+);/g)].map((m) => m[1]!.trim());
     expect(shadows).toEqual(['var(--shadow-float)']);
   });
-  it('字体走 @fontsource 的包（font-src self），不内联 data:', () => {
-    for (const f of ['@fontsource/ibm-plex-sans', '@fontsource/ibm-plex-mono', '@fontsource/noto-sans-sc']) expect(css).toContain(f);
-    expect(css).not.toMatch(/url\(["']?data:/);
-    expect(css).not.toMatch(/inter/i);
+  it('T-UI-FONT 共享界面用系统字，代码和数字用系统等宽，不加载或按语言切换字体', () => {
+    for (const token of [
+      '--font-ui: system-ui, sans-serif',
+      '--font-num: ui-monospace, "SFMono-Regular", Consolas, monospace',
+    ]) {
+      expect(css).toContain(`${token};`);
+      expect(spec).toContain(token);
+    }
+    expect(css).toContain('--font-sans: var(--font-ui);');
+    expect(css).toContain('--font-mono: var(--font-num);');
+    expect(css).not.toMatch(/@font-face|@fontsource|:lang\(|url\(["']?data:/i);
+    expect(readFileSync(resolve(ROOT, 'packages/ui/package.json'), 'utf8')).not.toContain('@fontsource');
+  });
+  it('T-UI-FONT 中英文启动页离线用系统字', () => {
+    const splash = splashFiles(ROOT);
+    const styles = splash.get('splash/splash.css');
+    expect(styles).toContain('font-family:system-ui,sans-serif');
+    expect(styles).not.toMatch(/@font-face|@import|:lang\(/i);
+    for (const language of ['en', 'zh-CN']) {
+      const page = splash.get(`splash/${language}-dark.html`);
+      expect(page).toContain(`<html lang="${language}"`);
+      expect(page).toContain('href="splash.css"');
+    }
   });
 });

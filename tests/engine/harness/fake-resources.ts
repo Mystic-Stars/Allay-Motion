@@ -1,8 +1,6 @@
 // test:engine 的假资源栈：纯色色块和几张拼出来的测试图，只是测试数据，不是产品素材（docs/09-compliance.md 9.6）。
-// 兜底字体用仓库里真实的方舟像素字体（构建时以文本导入），检验真实的字形路径。
-import { parseBdf } from '../../../packages/assets/src/index';
-import { FALLBACK_FONT_ID, type ResourceKind, type ResourcePayload } from '../../../packages/template-sdk/src/index';
-import bdfText from '../../../resources/fonts/ark-pixel/ark-pixel-12px-proportional-zh_hans.bdf?raw';
+import { DEFAULT_FONT_ID, type ResourceKind, type ResourcePayload } from '../../../packages/template-sdk/src/index';
+import { TEST_SKIN_REF, testSkinRgba } from '../../fixtures/builtin-template-names';
 
 export const FAKE_STAMP = 'test-fake-1';
 
@@ -54,19 +52,8 @@ function testFont(): ResourcePayload {
   };
 }
 
-let fallback: ResourcePayload | null = null;
-
 export async function fakeResolveResource(kind: ResourceKind, id: string): Promise<ResourcePayload | null> {
-  if (kind === 'font') {
-    if (id === FALLBACK_FONT_ID) {
-      if (!fallback) {
-        const t = parseBdf(bdfText);
-        fallback = { kind: 'bdf', ascent: t.ascent, descent: t.descent, codepoints: t.codepoints, metrics: t.metrics, offsets: t.offsets, bits: t.bits };
-      }
-      return structuredClone(fallback);
-    }
-    return vanillaFont ? testFont() : null;
-  }
+  if (kind === 'font') return vanillaFont && id === DEFAULT_FONT_ID ? testFont() : null;
   if (kind === 'sound-meta') {
     // M6b：多变体事件（权重 1、2、1）和单变体事件；其余事件没有定义
     if (id === 'test:multi') {
@@ -83,7 +70,11 @@ export async function fakeResolveResource(kind: ResourceKind, id: string): Promi
     return null;
   }
   if (kind !== 'texture') return null;
+  if (id === TEST_SKIN_REF) return { kind: 'rgba', width: 64, height: 64, data: testSkinRgba() };
   if (id.includes('does_not_exist') || id.includes('missing')) return null;
+  if (id === 'minecraft:ui/loading_bar') {
+    return { kind: 'rgba', width: 640, height: 8, data: image(640, 8, (x) => [30 + Math.floor(x / 64) * 20, 20, 30, 255]) };
+  }
   if (id === 'test:anim') {
     const data = image(16, 64, (_x, y) => [...ANIM_COLORS[y >> 4]!, 255]);
     return { kind: 'rgba', width: 16, height: 64, data, mcmeta: JSON.stringify({ animation: { frametime: 2 } }) };

@@ -23,6 +23,19 @@ function blockList(v: ParamValue | undefined): BlockEntry[] {
   return out.length > 0 ? out : [{ id: 'minecraft:diamond_block', weight: 1 }];
 }
 
+function orderedIndex(distribution: ParamValue | undefined, cols: number): ((index: number) => number) | undefined {
+  const row = (index: number) => Math.floor(index / cols);
+  const col = (index: number) => index % cols;
+  switch (distribution) {
+    case 'horizontalStripes': return row;
+    case 'verticalStripes': return col;
+    case 'cyclic': return (index) => index;
+    case 'checker': return (index) => col(index) + row(index) % 2;
+    case 'diagonal': return (index) => col(index) + row(index);
+    default: return undefined;
+  }
+}
+
 /**
  * 每个格子的顺序值 u ∈ [0, 1]：图案函数给出原始值并归一化，加 jitter × 随机数后再归一化（4.10）。
  * px、py 是格子中心的设计坐标（原点在舞台中心，+y 向上）。
@@ -109,23 +122,29 @@ const template: TemplateModule = {
     else if (outPattern === 'reverse') uOut = uIn.map((u) => 1 - u);
     else uOut = orderValues(ctx, outPattern as Pattern, px, py, jitter, 'out');
 
-    // 每个格子按权重随机分配一种方块；每种方块一组实例
+    // 只按最终落位分配材质；随机模式沿用旧的 blocks 随机流和取样顺序。
     const entries = blockList(params.blocks);
     const totalWeight = entries.reduce((a, e) => a + e.weight, 0);
-    const pick = ctx.random('blocks');
+    const paletteIndex = orderedIndex(params.materialDistribution, cols);
+    const pick = paletteIndex ? undefined : ctx.random('blocks');
     const kinds = [...new Set(entries.map((e) => e.id))];
     const cellKind = new Uint8Array(count);
     const kindCount = new Array<number>(kinds.length).fill(0);
     const cellIndex = new Uint32Array(count);
     for (let i = 0; i < count; i++) {
-      let x = pick.next() * totalWeight;
-      let id = entries[entries.length - 1]!.id;
-      for (const e of entries) {
-        x -= e.weight;
-        if (x < 0) {
-          id = e.id;
-          break;
+      let id: string;
+      if (pick) {
+        let x = pick.next() * totalWeight;
+        id = entries[entries.length - 1]!.id;
+        for (const e of entries) {
+          x -= e.weight;
+          if (x < 0) {
+            id = e.id;
+            break;
+          }
         }
+      } else {
+        id = entries[paletteIndex!(i) % entries.length]!.id;
       }
       const k = kinds.indexOf(id);
       cellKind[i] = k;
@@ -160,15 +179,17 @@ const template: TemplateModule = {
     // 音效：在最多 12 个均匀抽样的方块起始时刻放（4.10）
     const sampleCues = (sound: ParamValue | undefined, u: Float64Array, start: number, len: number) => {
       if (typeof sound !== 'string') return;
-      const sorted = Array.from(u).sort((a, b) => a - b);
+      const sorted = Array.from(u, (order, cell) => ({ order, cell })).sort((a, b) => a.order - b.order);
       const k = Math.min(12, sorted.length);
       for (let j = 0; j < k; j++) {
         const idx = k === 1 ? 0 : Math.round((j * (sorted.length - 1)) / (k - 1));
-        ctx.audio.cue(sound, start + sorted[idx]! * lag * len, { gain: volume });
+        const { order, cell } = sorted[idx]!;
+        ctx.audio.cue(sound, start + order * lag * len, params.spatialAudio === true ? { gain: volume, position: [px[cell]!, py[cell]!, 0] } : { gain: volume });
       }
     };
     sampleCues(params.placeSound, uIn, inStart, inLen);
     sampleCues(params.breakSound, uOut, outStart, outLen);
+    if (typeof params.music === 'string') ctx.audio.cue(params.music, 0, { gain: num(params.musicVolume, 0.5) });
 
     // update 里复用的对象（update 内不分配内存）
     const m = new THREE.Matrix4();

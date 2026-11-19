@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { ResourceThumb } from '@allay/ui/editor';
 import { useTranslation } from 'react-i18next';
 import { useResourceStore } from '../../stores/resourceStore';
-import { setVanilla } from './actions';
+import { selectInstalledVersion, setVanilla } from './actions';
 
 // 首次发现本机游戏时询问一次（03-assets.md 3.4、06-ui-design.md 6.6）。插图：悦灵 hover，手里捧着草方块（7.5 第 8 项）。
 // 第二个按钮原文是“先用内置素材”；v1 没有内置素材，改为“暂不使用”（decisions.md M2b）。
@@ -15,7 +15,8 @@ export function DiscoveryDialog() {
 
   const answer = (consent: boolean) => {
     useResourceStore.getState().setDiscoveryHandled();
-    void setVanilla(consent ? { consent: true, enabled: true } : { consent: false });
+    if (consent) void selectInstalledVersion();
+    else void setVanilla({ consent: false });
   };
   if (!local) return null;
   return (

@@ -1,9 +1,7 @@
 // 宿主接口（docs/code-editing-and-mcp-plan.md 3.3）：主程序给可选模块（packages/optional/*：内嵌编辑器、MCP）的唯一入口。
 // 只有类型，没有运行时代码；可选模块只能引用这个包（eslint.config.js 的依赖方向规则，T-DEV-4）。
 //
-// 这是草案，按现有代码能支撑的程度落地。实现在渲染进程的 app/editorHost.ts（MD-b），每个成员的注释里写了现状：
-// - 「已实现」：可选模块调用时可用；
-// - 「未实现」：主程序还没有对应的能力，调用时以 HostUnsupportedError 拒绝（不假装成功）。
+// 实现在渲染进程的 app/editorHost.ts（MD-b）。
 // 现在没有任何可选模块；接入点（按目录的惰性发现、开关表）见 app/optionalModules.ts。
 import type { TemplateDiagnostic } from '@allay/template-sdk';
 
@@ -19,6 +17,15 @@ export interface TemplateId {
   version: string;
 }
 
+export interface TemplateDocuments {
+  source: string;
+  manifest: string;
+}
+
+export type SourceReadResult =
+  | ({ ok: true; version: string } & TemplateDocuments)
+  | { ok: false; error: 'not-user' | 'io' };
+
 /**
  * 写模板源码的结果。baseVersion 是读的时候拿到的内容版本（内容哈希）；
  * 文件在这之后被外部改过时返回 conflict，带上当前的版本，由调用方决定怎么合并。
@@ -26,7 +33,8 @@ export interface TemplateId {
 export type WriteResult =
   | { ok: true; version: string }
   | { ok: false; error: 'conflict'; currentVersion: string }
-  | { ok: false; error: 'not-user' | 'invalid' | 'io' };
+  | { ok: false; error: 'invalid'; diagnostics: TemplateDiagnostic[] }
+  | { ok: false; error: 'not-user' | 'io' };
 
 /** 不落盘的试载：在备用 Worker 里装载并试渲当前帧（H9） */
 export type ReloadResult =
@@ -89,13 +97,12 @@ export interface CommandContribution {
 
 export interface EditorHost {
   templates: {
-    /** 读用户模板的源码和内容版本。未实现：主进程没有带内容版本的读取（主程序自己不读写模板代码） */
-    read(id: TemplateId): Promise<{ source: string; version: string }>;
-    /** 写源码；baseVersion 不是当前版本时返回 conflict。未实现：界面不反写模板代码，主进程没有写源码的接口 */
-    write(id: TemplateId, source: string, baseVersion: string): Promise<WriteResult>;
+    /** 只读已装载过的用户脚本模板的固定两个文件。内置模板需要先复制。 */
+    read(id: TemplateId): Promise<SourceReadResult>;
+    /** 静态预检并保存两个文档；baseVersion 不是当前版本时返回 conflict。 */
+    write(id: TemplateId, files: TemplateDocuments, baseVersion: string): Promise<WriteResult>;
     /**
-     * 文件在应用之外被改动时回调，参数是新的内容版本。
-     * 已实现：主进程的监视服务和 templates:changed 事件（hash 就是这里的 version；removed 不回调）。
+     * 文件在应用之外被改动时回调。监视事件的哈希还包括素材，不可当作保存用的内容版本。
      */
     onExternalChange(id: TemplateId, cb: (version: string) => void): Disposable;
   };
@@ -105,7 +112,7 @@ export interface EditorHost {
      */
     onDiagnostics(id: TemplateId, cb: (d: TemplateDiagnostic[]) => void): Disposable;
     /** 不落盘的试载（H9）：只能是当前模板；通过就把预览切到这份代码。已实现 */
-    requestReload(id: TemplateId, source: string): Promise<ReloadResult>;
+    requestReload(id: TemplateId, files: TemplateDocuments): Promise<ReloadResult>;
   };
   playhead: {
     /** 当前时刻（秒）。已实现 */

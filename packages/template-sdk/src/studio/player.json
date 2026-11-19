@@ -1,0 +1,40 @@
+{
+  "formatVersion": 1,
+  "id": "allay.builtin.player-motion",
+  "version": "1.0.0",
+  "name": { "zh-CN": "玩家动作与镜头", "en": "Player motion & camera" },
+  "description": { "zh-CN": "使用自己的皮肤，制作站立、行走、疾跑或跳跃的透明叠加动画。", "en": "Animate your own skin standing, walking, sprinting or jumping on a transparent background." },
+  "license": "MIT",
+  "category": "overlay",
+  "tags": ["player", "skin", "camera"],
+  "groups": [
+    { "key": "motion", "label": { "zh-CN": "动作", "en": "Motion" } },
+    { "key": "camera", "label": { "zh-CN": "镜头", "en": "Camera" } }
+  ],
+  "params": [
+    { "key": "skin", "type": "texture", "skinLibrary": true, "label": { "zh-CN": "皮肤", "en": "Skin" }, "default": "" },
+    { "key": "armModel", "type": "enum", "label": { "zh-CN": "手臂", "en": "Arms" }, "default": "classic", "options": [
+      { "value": "classic", "label": { "zh-CN": "Classic 宽臂", "en": "Classic" } },
+      { "value": "slim", "label": { "zh-CN": "Slim 细臂", "en": "Slim" } }
+    ] },
+    { "key": "edition", "type": "enum", "group": "motion", "label": { "zh-CN": "动作参考", "en": "Motion reference" }, "default": "java", "hint": { "zh-CN": "两套原创近似，不是游戏原版动作；站立共用姿势。", "en": "Two original interpretations, not in-game animations. Idle uses the same pose in both." }, "visibleWhen": { "key": "action", "not": "idle" }, "options": [
+      { "value": "java", "label": { "zh-CN": "Java 版参考", "en": "Java reference" } },
+      { "value": "bedrock", "label": { "zh-CN": "基岩版参考", "en": "Bedrock reference" } }
+    ] },
+    { "key": "action", "type": "enum", "group": "motion", "label": { "zh-CN": "动作", "en": "Action" }, "default": "walk", "options": [
+      { "value": "idle", "label": { "zh-CN": "站立", "en": "Idle" } },
+      { "value": "walk", "label": { "zh-CN": "行走", "en": "Walk" } },
+      { "value": "sprint", "label": { "zh-CN": "疾跑", "en": "Sprint" } },
+      { "value": "jump", "label": { "zh-CN": "跳跃", "en": "Jump" } }
+    ] },
+    { "key": "duration", "type": "duration", "group": "motion", "label": { "zh-CN": "时长", "en": "Duration" }, "default": 3, "min": 0.5, "max": 15 },
+    { "key": "view", "type": "enum", "group": "camera", "label": { "zh-CN": "视角", "en": "View" }, "default": "third", "options": [
+      { "value": "third", "label": { "zh-CN": "第三人称", "en": "Third person" } },
+      { "value": "first", "label": { "zh-CN": "第一人称", "en": "First person" } }
+    ] },
+    { "key": "bob", "type": "number", "group": "camera", "label": { "zh-CN": "步伐晃动", "en": "Camera bob" }, "default": 0.5, "min": 0, "max": 1, "step": 0.05, "ui": "slider", "visibleWhen": { "key": "action", "in": ["walk", "sprint"] } },
+    { "key": "fov", "type": "number", "group": "camera", "label": { "zh-CN": "垂直视野", "en": "Vertical FOV" }, "hint": { "zh-CN": "第三人称会随视野调整机位距离，使角色取景大小大致不变。", "en": "In third person, the camera distance compensates to keep the character roughly the same size in frame." }, "default": 50, "min": 35, "max": 80, "step": 1, "ui": "slider" },
+    { "key": "orbit", "type": "number", "group": "camera", "label": { "zh-CN": "环绕角度", "en": "Orbit angle" }, "default": 28, "min": -180, "max": 180, "step": 1, "ui": "slider", "visibleWhen": { "key": "view", "equals": "third" } }
+  ],
+  "defaultOutput": { "width": 1920, "height": 1080, "fps": 60 }
+}

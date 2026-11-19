@@ -10,7 +10,7 @@ import {
   type TemplateManifest,
 } from './manifest';
 import { MANIFEST_MIGRATIONS, migrate, type Migrations } from './migrate';
-import { sanitizeValue } from './params';
+import { readLegacyParam, readLegacyText, sanitizeValue } from './params';
 import { satisfies } from './semver';
 
 export type ManifestParseResult =
@@ -89,13 +89,18 @@ export function resolveDerived(derived: TemplateManifest, base: TemplateManifest
   if (base.extends) throw new DeriveError('base-not-script', `${base.id} is itself a derived template`);
   const defaults = derived.overrides?.defaults ?? {};
   const params = (base.params ?? []).map((def): ParamDef => {
-    if (!Object.hasOwn(defaults, def.key)) return def;
-    const value = sanitizeValue(def, defaults[def.key]);
+    const raw = Object.hasOwn(defaults, def.key) ? defaults[def.key] : readLegacyParam(def, defaults);
+    if (raw === undefined) return def;
+    const value = sanitizeValue(def, raw);
     return { ...def, default: value } as ParamDef;
   });
   const keys = new Set(params.map((p) => p.key));
-  const hidden = [...new Set(derived.overrides?.hidden ?? [])].filter((k) => keys.has(k));
-  return { manifest: derived, params, hidden, timeline: base.timeline, groups: base.groups, codeFrom: { id: base.id, version: base.version } };
+  const hiddenKeys = new Set(derived.overrides?.hidden ?? []);
+  const hidden = [...hiddenKeys].filter((k) => keys.has(k));
+  for (const def of params) {
+    if (def.type === 'text' && readLegacyText(def, defaults) !== undefined && def.legacyText?.some(({ key }) => hiddenKeys.has(key))) hidden.push(def.key);
+  }
+  return { manifest: derived, params, hidden: [...new Set(hidden)], timeline: base.timeline, groups: base.groups, codeFrom: { id: base.id, version: base.version } };
 }
 
 /** 从已安装的版本里挑满足范围的最高版本 */

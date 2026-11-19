@@ -1,4 +1,4 @@
-import type { AudioCue } from '@allay/template-sdk';
+import type { AudioCue, CompositionLoadResult, EffectiveTiming, FontUsage, LoadResult } from '@allay/template-sdk';
 import { create } from 'zustand';
 import type { LoadIssue } from '../features/preview/loadIssues';
 
@@ -19,30 +19,41 @@ export type PreviewStatus =
 
 interface PreviewState {
   status: PreviewStatus;
+  loaded: { revision: number; locale: string; duration: number; timing?: EffectiveTiming | undefined; clipTiming?: CompositionLoadResult['clipTiming'];
+    resourceNotices?: LoadResult['resourceNotices']; clipResourceNotices?: CompositionLoadResult['clipResourceNotices'] } | null;
   /** 当前 Worker 是第几个（每重建一次加一） */
   generation: number;
   /** 当前装载结果里的音效 cue（时间轴的音效轨只读显示） */
   audioCues: readonly AudioCue[];
   /** 最近一次播放、导出时放不出声的音效事件（资源栈里没有，已静音并提示过） */
   audioMissing: readonly string[];
+  fontUsage: readonly FontUsage[];
   /** 播放时实测的预览帧率（最近约 1 秒的滑动平均）；没在播放时为 null */
   measuredFps: number | null;
-  setStatus(status: PreviewStatus): void;
+  setStatus(status: PreviewStatus, loaded?: NonNullable<PreviewState['loaded']>): void;
   setGeneration(generation: number): void;
   setAudioCues(cues: readonly AudioCue[]): void;
   setAudioMissing(missing: readonly string[]): void;
+  setFontUsage(usage: readonly FontUsage[]): void;
+  clearResourceNotices(): void;
   setMeasuredFps(fps: number | null): void;
 }
 
 export const usePreviewStore = create<PreviewState>((set) => ({
   status: { kind: 'starting' },
+  loaded: null,
   generation: 0,
   audioCues: [],
   audioMissing: [],
+  fontUsage: [],
   measuredFps: null,
-  setStatus: (status) => set({ status }),
+  setStatus: (status, loaded) => set({ status, loaded: loaded ?? null, fontUsage: [] }),
   setGeneration: (generation) => set({ generation }),
   setAudioCues: (audioCues) => set({ audioCues }),
   setAudioMissing: (audioMissing) => set({ audioMissing: [...audioMissing] }),
+  setFontUsage: (fontUsage) => set((state) => state.fontUsage.length === fontUsage.length && state.fontUsage.every((item, index) =>
+    item.clipId === fontUsage[index]?.clipId && item.flags === fontUsage[index]?.flags) ? state : { fontUsage }),
+  clearResourceNotices: () => set((state) => state.loaded && (state.loaded.resourceNotices || state.loaded.clipResourceNotices)
+    ? { loaded: { ...state.loaded, resourceNotices: undefined, clipResourceNotices: undefined } } : state),
   setMeasuredFps: (measuredFps) => set({ measuredFps }),
 }));

@@ -32,6 +32,8 @@ uniform float uUseTex;
 uniform vec3 uColor;
 uniform sampler2D uTex;
 uniform float uTile;
+uniform vec2 uTexRepeat;
+uniform vec2 uTexOffset;
 uniform vec4 uStripeA;
 uniform vec4 uStripeB;
 varying vec2 vUv;
@@ -49,7 +51,7 @@ void main() {
     if (uUseTex > 0.5) {
       // 方块贴图按 tileSize 平铺（相对舞台固定）；用连续坐标的导数取 mipmap，避免 fract 接缝处跳级
       vec2 uv = p / uTile;
-      gl_FragColor = vec4(textureGrad(uTex, fract(uv), dFdx(uv), dFdy(uv)).rgb, 1.0);
+      gl_FragColor = vec4(textureGrad(uTex, fract(uv) * uTexRepeat + uTexOffset, dFdx(uv) * uTexRepeat, dFdy(uv) * uTexRepeat).rgb, 1.0);
     } else {
       gl_FragColor = vec4(uColor, 1.0);
     }
@@ -107,6 +109,8 @@ const template: TemplateModule = {
       uUseTex: { value: fillTexture ? 1 : 0 },
       uColor: { value: new THREE.Color(str(params.fillColor, '#2072D5').slice(0, 7)) },
       uTex: { value: fillTexture },
+      uTexRepeat: { value: fillTexture?.repeat ?? new THREE.Vector2(1, 1) },
+      uTexOffset: { value: fillTexture?.offset ?? new THREE.Vector2() },
       uTile: { value: tileSize },
       uStripeA: { value: stripe(params.stripeA, '#52CFF3') },
       uStripeB: { value: stripe(params.stripeB, '#F2F4F6') },
@@ -122,15 +126,16 @@ const template: TemplateModule = {
     const itemHeight = itemScale * H;
     const holder = new THREE.Object3D();
     let itemRadius: number;
-    if (image !== '') {
-      const tex = await ctx.resources.texture(image);
+    const tex = image === '' ? null : await ctx.resources.optionalTexture(image);
+    if (tex) {
       const img = tex.image as { width?: number; height?: number } | null;
-      const aspect = img && img.width && img.height ? img.width / img.height : 1;
+      const aspect = img?.width && img.height ? (img.width * tex.repeat.x) / (img.height * tex.repeat.y) : 1;
       const sprite = ctx.sprite.create(tex);
       sprite.setSize(itemHeight * aspect, itemHeight);
       holder.add(sprite.object);
       itemRadius = (itemHeight * Math.hypot(1, aspect)) / 2;
     } else {
+      if (image !== '') ctx.warn(ctx.locale.startsWith('zh') ? '自定义图片不可用，仍使用原选物品。' : 'The custom image is unavailable. Using the previously selected item.');
       const item = (await ctx.resources.item(itemId)).single();
       item.scale.setScalar(itemHeight);
       holder.add(item);

@@ -1,14 +1,19 @@
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { app, session, shell, type BrowserWindow } from 'electron';
+import { app, Menu, session, shell, type BrowserWindow } from 'electron';
 import { IPC } from '../shared/ipc-channels';
+import type { MacMenuState } from '../shared/mac-menu';
+import type { RecentProject } from '../shared/project';
 import { handleAppProtocol, registerAppScheme } from './app-protocol';
+import { registerCodeInspector } from './code-inspector';
 import { FileGrants } from './file-grants';
 import { registerHandlers } from './handlers';
+import { registerSkinHandlers } from './skins/handlers';
 import { ProjectService } from './project/service';
 import { ExportService } from './export/export-service';
 import { createIpcRegistrar } from './ipc';
 import { createLogger } from './logger';
+import { macMenuTemplate } from './mac-menu';
 import { createVanillaDownloader, MOJANG_HOSTS } from './resources/download';
 import { ResourceService } from './resources/service';
 import { APP_ENTRY_URL, APP_ORIGIN, assertLocalDevOrigin } from './security-policy';
@@ -69,6 +74,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   let mainWindow: BrowserWindow | null = null;
+  const codeInspector = registerCodeInspector({ devOrigin, hiddenForTests, log });
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), log);
   const folders = new FolderService({ settings, log, getMainWindow: () => mainWindow, pickForTests: testSwitches.pickFolder });
   const exports = new ExportService({
@@ -90,7 +96,6 @@ if (!app.requestSingleInstanceLock()) {
   const resources = new ResourceService({
     userDataDir: userData,
     builtinDir: join(bundledResources, 'builtin-pack'),
-    fallbackFontFile: join(bundledResources, 'fonts', 'ark-pixel', 'ark-pixel-12px-proportional-zh_hans.bdf'),
     settings,
     log,
     // 测试用 ALLAY_E2E_GAME_APPDATA 代替 %APPDATA%（只在未打包时生效），不碰这台机器上真装的游戏
@@ -107,25 +112,7 @@ if (!app.requestSingleInstanceLock()) {
     },
   });
   const thumbs = new ThumbCache(userData);
-  // 自动更新（docs/decisions.md“自动更新”）：只有打包后的应用会自动检查；安装时运行安装包或打开 dmg，然后退出
-  const updates = new UpdateService({
-    currentVersion: app.getVersion(),
-    packaged: app.isPackaged,
-    downloadDir: join(userData, 'updates'),
-    platform: process.platform,
-    arch: process.arch,
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    prefs: () => settings.ui.updates,
-    log,
-    onChanged: (state) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.updates.changed, state);
-    },
-    quit: () => app.quit(),
-    openPath: (path) => shell.openPath(path),
-    tempDir: tmpdir(),
-    // 安装目录旁边（安装盘上）：系统临时文件夹所在磁盘不够时让安装程序用它（docs/decisions.md“安装时临时空间不足”）
-    fallbackTempDir: app.isPackaged && process.platform === 'win32' ? join(dirname(dirname(process.execPath)), 'AllayMotion-update-temp') : null,
-  });
+  let updateService: UpdateService | undefined;
   // 模板：内置的来自 resources/templates/（pnpm templates:build 的产物），用户的在 userData/templates/（4.8、4.9）
   const templates = new TemplateService({ builtinDir: join(bundledResources, 'templates'), userDataDir: userData, appVersion: app.getVersion(), log });
   const presets = new PresetStore(userData, log);
@@ -175,12 +162,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => app.quit());
 
   // 退出前等设置写完、取消进行中的导出（不留临时文件）
+  let quitting = false;
   let flushed = false;
   app.on('before-quit', (event) => {
     if (flushed) return;
     event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    codeInspector.shutdown();
     resources.cancelDownload();
-    updates.stop();
+    updateService?.stop();
     void Promise.allSettled([settings.flush(), exports.cancelAll()]).finally(() => {
       resources.close();
       templateDev.close();
@@ -190,6 +181,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(async () => {
+    if (quitting) return;
     startup.mark('app-ready');
     log.info('app', 'starting', { version: app.getVersion(), packaged: app.isPackaged, dev: devOrigin !== null });
     hardenSession(session.defaultSession, devOrigin, log);
@@ -198,6 +190,27 @@ if (!app.requestSingleInstanceLock()) {
     // 同步读：启动画面要按主题和语言挑页面，越早建越早出现（T-ARC-7）
     settings.loadSync();
     startup.mark('settings-loaded');
+
+    // 自动更新（docs/decisions.md“自动更新”）：只有打包后的应用会自动检查；安装时运行安装包或打开 dmg，然后退出
+    const updates = new UpdateService({
+      currentVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      downloadDir: join(userData, 'updates'),
+      platform: process.platform,
+      arch: process.arch,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      prefs: () => settings.ui.updates,
+      log,
+      onChanged: (state) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.updates.changed, state);
+      },
+      quit: () => app.quit(),
+      openPath: (path) => shell.openPath(path),
+      tempDir: tmpdir(),
+      // 安装目录旁边（安装盘上）：系统临时文件夹所在磁盘不够时让安装程序用它（docs/decisions.md“安装时临时空间不足”）
+      fallbackTempDir: app.isPackaged && process.platform === 'win32' ? join(dirname(dirname(process.execPath)), 'AllayMotion-update-temp') : null,
+    });
+    updateService = updates;
 
     // 启动画面（7.6 C）：设置读完就显示（要按主题和语言挑页面），主窗口就绪后淡出。后台测试默认不建，设了开关才建（不显示）
     let splash: Splash | null =
@@ -209,10 +222,47 @@ if (!app.requestSingleInstanceLock()) {
     // 模板列表在注册 IPC 之前准备好：渲染进程第一次 templates.list 就能拿到内置模板
     if (splash) await splash.firstFrame(SPLASH_FIRST_FRAME_WAIT_MS);
     await templatesReady;
+    if (quitting) return;
     // 监视在模板列表就绪之后开始，不阻塞窗口（只读一遍现有用户模板的文件算哈希）
     void templateDev.start().catch((error: unknown) => log.warn('templates', 'template folder watcher did not start', { error: String(error) }));
     const grants = new FileGrants();
     const projects = new ProjectService({ userDataDir: userData, appVersion: app.getVersion(), grants, log });
+    const isMac = process.platform === 'darwin';
+    let menuState: MacMenuState | null = null;
+    let rendererReady = false;
+    let recents: Pick<RecentProject, 'id' | 'name'>[] = [];
+    let menuSignature = '';
+    const refreshMenu = () => {
+      if (!isMac) return;
+      const { language, theme, editor } = settings.ui;
+      const fullScreen = mainWindow?.isFullScreen() ?? false;
+      const state = rendererReady ? menuState : null;
+      const signature = JSON.stringify([language, theme, editor.background, editor.guides, fullScreen, state, recents]);
+      if (signature === menuSignature) return;
+      menuSignature = signature;
+      Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate({
+        appName: app.name,
+        systemLocale: app.getPreferredSystemLanguages()[0] ?? app.getLocale(),
+        ui: settings.ui,
+        state,
+        recents,
+        fullScreen,
+        run: (command, input) => {
+          if (!rendererReady || !menuState?.enabled.includes(command)) return;
+          void hostCommands.run(command, input, { source: 'mac-menu', timeoutMs: 5 * 60_000 }).then((result) => {
+            if (!result.ok && result.error !== 'disabled') log.warn('mac-menu', 'command failed', { command, error: result.error });
+          });
+        },
+      })));
+    };
+    const refreshRecents = () => {
+      void projects.recents().then((items) => {
+        recents = items.map(({ id, name }) => ({ id, name }));
+        refreshMenu();
+      }).catch((error: unknown) => log.warn('mac-menu', 'recent projects unavailable', { error: String(error) }));
+    };
+    refreshMenu();
+    if (isMac) refreshRecents();
     registerHandlers({
       registrar,
       settings,
@@ -228,14 +278,24 @@ if (!app.requestSingleInstanceLock()) {
       updates,
       onRendererReady: () => {
         startup.mark('renderer-ready');
+        rendererReady = true;
+        refreshMenu();
         openFiles.markReady();
       },
+      ...(isMac && {
+        onMacMenuState: (state: MacMenuState) => {
+          menuState = state;
+          refreshMenu();
+        },
+        onProjectRecentsChanged: refreshRecents,
+      }),
       presets,
       projects,
       projectPathForTests: testSwitches.projectPath,
       testHooks: testSwitches.testHooks,
       getMainWindow: () => mainWindow,
     });
+    registerSkinHandlers(registrar, userData, () => mainWindow);
     // 资源栈：内置层和资源包先打开，原版层在后台离线探测（3.4），结果经 resources:changed 推给渲染进程
     void resources.init();
     // 启动时跑一次 ffmpeg -version 并记进日志（5.6），不阻塞窗口
@@ -243,6 +303,7 @@ if (!app.requestSingleInstanceLock()) {
     let updatePrefs = settings.ui.updates;
     settings.onUiChanged((ui) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.settings.changed, ui);
+      refreshMenu();
       if (ui.updates !== updatePrefs) {
         updates.prefsChanged(updatePrefs, ui.updates);
         updatePrefs = ui.updates;
@@ -262,6 +323,7 @@ if (!app.requestSingleInstanceLock()) {
         splash = null;
       },
     });
+    codeInspector.attach(mainWindow);
     // 后台测试的窗口不显示，没有 onShown：页面加载完就关掉启动画面（仍然等满最短时长）
     if (hiddenForTests && splash) {
       const s = splash;
@@ -270,9 +332,23 @@ if (!app.requestSingleInstanceLock()) {
     // 文件夹形式的资源包：窗口重新获得焦点时重扫（3.5）
     mainWindow.on('focus', () => void resources.rescanFolders());
     // 页面重新加载（开发时）：等新页面再次 host.ready 才继续执行文件关联的请求
-    mainWindow.webContents.on('did-start-loading', () => openFiles.markNotReady());
+    const resetRendererMenu = () => {
+      rendererReady = false;
+      menuState = null;
+      refreshMenu();
+    };
+    mainWindow.webContents.on('did-start-loading', () => {
+      openFiles.markNotReady();
+      if (isMac) resetRendererMenu();
+    });
+    if (isMac) {
+      mainWindow.webContents.on('render-process-gone', resetRendererMenu);
+      mainWindow.on('enter-full-screen', refreshMenu);
+      mainWindow.on('leave-full-screen', refreshMenu);
+    }
     mainWindow.on('closed', () => {
       mainWindow = null;
+      if (isMac) resetRendererMenu();
       openFiles.markNotReady();
       hostCommands.cancelAll();
       splash?.close();

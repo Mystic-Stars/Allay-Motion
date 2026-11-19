@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { requiredTextures } from '../../packages/assets/src/index';
-import { catalogJarEntries, makeCatalogGame, packMcmeta, solidPng, tex, writeZip } from '../unit/helpers/resource-fixtures';
+import { buildZip, catalogJarEntries, makeCatalogGame, packMcmeta, solidPng, tex, writeFiles, writeZip } from '../unit/helpers/resource-fixtures';
 import { startFakeMojang, type FakeMojang } from './fake-mojang';
 import { ROOT, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, type Launched } from './helpers';
 
@@ -33,7 +34,7 @@ const SPOT: [number, number] = [5.5 / 12, 0.574];
 type Color = 'red' | 'green' | 'blue' | 'placeholder' | 'other';
 function classify([r, g, b, a]: [number, number, number, number]): Color {
   if (a < 250) return 'other';
-  if ((r > 150 && g < 60 && b > 150) || (r < 30 && g < 30 && b < 30)) return 'placeholder';
+  if (r > 40 && r < 205 && g > r && b > g && b - r < 45) return 'placeholder';
   if (r > 120 && g < 60 && b < 60) return 'red';
   if (g > 120 && r < 60 && b < 60) return 'green';
   if (b > 120 && r < 60 && g < 60) return 'blue';
@@ -100,20 +101,25 @@ async function dropFiles(page: Page, paths: string[]): Promise<void> {
 
 const layerIds = (page: Page) => page.evaluate(() => window.__allayTest!.resourceState()!.layers.map((l) => `${l.kind}:${l.name}:${l.enabled}`));
 
-test('没有任何素材层时显示引导状态（说明会联网到哪里），而不是报错或白屏', async () => {
+test('没有任何素材层时显示简短引导；管理素材才展开联网说明', async () => {
   const env = prepare();
   const { app, page } = await launchApp(env.dir, env.extra);
   try {
     await waitReady(page);
     await expect(page.getByTestId('resources-onboarding')).toBeVisible();
     await expect(page.getByTestId('preview-error')).toHaveCount(0);
-    for (const id of ['vanilla-download', 'vanilla-choose-dir', 'onboarding-add-pack']) await expect(page.getByTestId(id)).toBeVisible();
-    await expect(page.getByTestId('download-note')).toContainText('piston-meta.mojang.com');
-    await expect(page.getByTestId('download-note')).toContainText('piston-data.mojang.com');
+    await expect(page.getByTestId('onboarding-add-pack')).toBeVisible();
+    await expect(page.getByTestId('download-note')).not.toBeVisible();
     // 模板照常装载，缺的贴图是占位（并报警告），画面不是空的
     const status = await page.evaluate(() => window.__allayTest!.status());
     expect(status.kind === 'ready' && status.warnings.some((w) => w.includes(DIAMOND))).toBe(true);
     expect(await spotColor(page)).toBe('placeholder');
+    await page.getByTestId('onboarding-manage-assets').click();
+    const settings = page.getByTestId('settings-dialog');
+    await expect(settings.getByTestId('vanilla-choose-dir')).toBeVisible();
+    await settings.getByTestId('resources-download-options').click();
+    await expect(settings.getByTestId('download-note')).toContainText('piston-meta.mojang.com');
+    await expect(settings.getByTestId('download-note')).toContainText('piston-data.mojang.com');
     // 没有询问对话框（没找到游戏），没有任何下载请求
     await expect(page.getByTestId('vanilla-discovery')).toHaveCount(0);
     expect(readMainLog(env.dir)).not.toContain('vanilla downloaded');
@@ -182,6 +188,68 @@ test('首次发现时选“暂不使用”：不用原版层，引导状态里�
   }
 });
 
+for (const [language, theme, manage] of [['zh-CN', 'dark', '管理素材…'], ['en', 'light', 'Manage assets…']] as const) {
+  test(`T-AST-VERSION 快切、查看所选详情及焦点返回 (${language}, ${theme})`, async () => {
+    const env = prepare({ game: true, consent: true });
+    const gameDir = join(env.appData, '.minecraft');
+    const cacheDir = join(env.dir, 'vanilla-cache', 'versions', '1.21.1');
+    const jar = Buffer.from(buildZip(catalogJarEntries(REQUIRED, { [DIAMOND]: BLUE })));
+    writeFiles(cacheDir, {
+      'client.jar': jar,
+      'version.json': JSON.stringify({ id: '1.21.1', type: 'release', releaseTime: '2024-08-08T00:00:00Z', downloads: { client: { url: 'https://piston-data.mojang.com/client.jar', sha1: createHash('sha1').update(jar).digest('hex'), size: jar.byteLength } } }),
+    });
+    const bedrock = join(env.dir, 'fixture.mcpack');
+    writeZip(bedrock, [
+      { name: 'manifest.json', data: JSON.stringify({ format_version: 2, header: { name: 'Fixture Bedrock', uuid: '0137cfde-ebdb-4c12-8ee9-2f4d5bba0261', version: [1, 2, 3] }, modules: [{ type: 'resources' }] }) },
+      { name: 'textures/terrain_texture.json', data: JSON.stringify({ texture_data: { stone: { textures: 'textures/blocks/stone' } } }) },
+      { name: 'textures/blocks/stone.png', data: solidPng(RED) },
+    ]);
+    const { app, page } = await launchApp(env.dir, env.extra);
+    try {
+      await page.evaluate(([lang, mode]) => window.allay.settings.set({ language: lang, theme: mode }), [language, theme] as const);
+      await waitReady(page);
+      await dropFiles(page, [bedrock]);
+      await expect.poll(() => page.evaluate(() => window.__allayTest!.resourceState()?.library?.profiles.length)).toBe(3);
+      const trigger = page.getByTestId('resources-button');
+      await trigger.press('Enter');
+      const popup = page.getByTestId('resources-popover');
+      const vanillaRow = popup.locator('[data-testid="layer-row"][data-layer-id="vanilla"]');
+      await expect(vanillaRow).toHaveCount(1);
+      const quick = vanillaRow.getByTestId('resources-quick-version');
+      await quick.press('Enter');
+      const options = page.getByRole('option');
+      await expect(options).toHaveCount(3);
+      await expect(options.filter({ hasText: '1.21.1' })).toHaveCount(2);
+      await expect(options.filter({ hasText: 'Fixture Bedrock' })).toContainText(/Bedrock · local pack|基岩版/);
+      await options.filter({ hasText: /downloaded|下载缓存/ }).click();
+      await expect(quick).toContainText(/downloaded|下载缓存/);
+      const open = popup.getByRole('button', { name: manage });
+      await expect(popup.getByTestId('version-library')).toHaveCount(0);
+      await open.press('Enter');
+      const settings = page.getByTestId('settings-dialog');
+      await expect(settings.getByTestId('settings-tab-assets')).toHaveAttribute('aria-selected', 'true');
+      await expect(popup).toHaveCount(0);
+      const details = settings.getByTestId('resource-profile-details');
+      await expect(details).toHaveCount(1);
+      await expect(details).toContainText(cacheDir);
+      const local = settings.locator('[data-testid="resource-profile"][data-source="local"]');
+      await local.press('Enter');
+      await expect(local).toBeFocused();
+      await expect(details).toContainText(gameDir);
+      await expect(details).not.toContainText(cacheDir);
+      expect(await page.evaluate(() => window.__allayTest!.resourceState()?.vanilla.active)).toBe('cached');
+      await page.keyboard.press('Escape');
+      await expect(settings).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      await trigger.press('Enter');
+      await expect(popup).toBeVisible();
+    } finally {
+      await app.close();
+      removeUserDataDir(env.dir);
+    }
+  });
+}
+
 test('资源栈弹层：拖入资源包，叠加顺序、开关、重排都会改变预览', async () => {
   const env = prepare({ game: true, consent: true });
   const red = packZip(env.dir, 'Red', RED);
@@ -231,13 +299,23 @@ test('资源栈弹层：拖入资源包，叠加顺序、开关、重排都会�
     // 关掉 Red → Blue
     await row('Red').getByTestId('layer-toggle').click();
     await expectSpot(page, 'blue');
-    // 删除 Blue → 原版（Red 还关着）
-    await row('Blue').getByTestId('layer-remove').click();
+    // 从管理页删除 Blue → 原版（Red 还关着）
+    await popover.getByTestId('resources-manage').click();
+    const settings = page.getByTestId('settings-dialog');
+    await expect(popover).toHaveCount(0);
+    await settings.getByTestId('layer-row').filter({ hasText: 'Blue' }).getByTestId('layer-remove').click();
     await expectSpot(page, 'green');
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+    await page.getByTestId('resources-button').click();
     // 关掉原版层 → 占位
-    await row('1.21.1').getByTestId('layer-toggle').click();
+    const vanillaToggle = row('1.21.1').getByTestId('layer-toggle');
+    await vanillaToggle.press('Space');
     await expectSpot(page, 'placeholder');
     expect(await layerIds(page)).toEqual(['builtin:builtin:true', 'vanilla:1.21.1:false', 'pack:Red:false']);
+    await expect(vanillaToggle).toBeFocused();
+    await vanillaToggle.press('Space');
+    await expectSpot(page, 'green');
     // 键盘：Escape 关闭弹层
     await page.keyboard.press('Escape');
     await expect(popover).toHaveCount(0);
@@ -311,7 +389,11 @@ test.describe('下载原版资源（本机假服务器）', () => {
 
       // 1) 取消：jar 发了一半停住时点“取消下载”
       server.jarMode = 'hold';
-      await page.getByTestId('vanilla-download').click();
+      await page.getByTestId('onboarding-manage-assets').click();
+      const settings = page.getByTestId('settings-dialog');
+      await settings.getByTestId('resources-download-options').click();
+      expect(server.requests).toEqual([]);
+      await settings.getByTestId('vanilla-download').click();
       await expect(page.getByTestId('download-progress')).toBeVisible();
       await expect.poll(() => server.holding(), { timeout: 15_000 }).toBe(true);
       // 分阶段的进度（6.12）：停在“下载客户端 jar”，已经收到一半
@@ -339,6 +421,8 @@ test.describe('下载原版资源（本机假服务器）', () => {
       await page.getByTestId('download-retry').click();
       await expect.poll(() => page.evaluate(() => window.__allayTest!.resourceState()!.vanilla.active), { timeout: 20_000 }).toBe('cached');
       await expect(page.getByTestId('resources-onboarding')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(settings).toHaveCount(0);
       await expectSpot(page, 'blue');
       expect(existsSync(join(cache, 'versions', '9.9.9', 'client.jar'))).toBe(true);
       // 只访问了白名单里的路径，没有任何标识头
@@ -351,14 +435,14 @@ test.describe('下载原版资源（本机假服务器）', () => {
   });
 });
 
-test('缩略图：杂务 Worker 生成，按 resourceStamp 缓存到 cache/thumbs/，资源栈一变就失效', async () => {
+test('缩略图：杂务 Worker 生成，按渲染版本和 resourceStamp 缓存，资源栈一变就失效', async () => {
   const env = prepare({ game: true, consent: true });
   const { app, page } = await launchApp(env.dir, env.extra);
   try {
     await waitReady(page);
     const first = await page.evaluate(() => window.__allayTest!.thumbnail('block', 'minecraft:stone', 64));
     expect(first).toMatchObject({ source: 'rendered', width: 64, height: 64 });
-    const file = join(env.dir, 'cache', 'thumbs', first!.stamp, 'block_64_minecraft~stone.png');
+    const file = join(env.dir, 'cache', 'thumbs-v2', first!.stamp, 'block_64_minecraft~stone.png');
     expect(existsSync(file)).toBe(true);
     expect(await page.evaluate(() => window.__allayTest!.thumbnail('block', 'minecraft:stone', 64))).toMatchObject({ source: 'memory' });
     const item = await page.evaluate(() => window.__allayTest!.thumbnail('item', 'minecraft:diamond', 128));
@@ -377,7 +461,7 @@ test('缩略图：杂务 Worker 生成，按 resourceStamp 缓存到 cache/thumb
     const again = await page.evaluate(() => window.__allayTest!.thumbnail('block', 'minecraft:stone', 64));
     expect(['rendered', 'memory']).toContain(again!.source);
     expect(again!.stamp).not.toBe(first!.stamp);
-    await expect.poll(() => existsSync(join(env.dir, 'cache', 'thumbs', again!.stamp, 'block_64_minecraft~stone.png'))).toBe(true);
+    await expect.poll(() => existsSync(join(env.dir, 'cache', 'thumbs-v2', again!.stamp, 'block_64_minecraft~stone.png'))).toBe(true);
     expect(existsSync(file)).toBe(false);
   } finally {
     await app.close();

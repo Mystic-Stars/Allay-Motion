@@ -1,11 +1,22 @@
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@allay/ui/components/resizable';
-import { Fragment, useCallback, useEffect, useLayoutEffect } from 'react';
+import { Button } from '@allay/ui/components/button';
+import { ICON } from '@allay/ui/lib/icons';
+import { ArrowLeft } from '@phosphor-icons/react';
+import { Activity, Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { usePanelRef, type PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
+import { StudioTemplateLibrary } from '../features/gallery/GalleryPanel';
+import { selectCodeClip } from '../features/live-code/host/selection';
 import { PreviewArea } from '../features/preview/PreviewArea';
 import { TimelinePanel } from '../features/transport/TransportBar';
+import { usePlaybackClock } from '../features/transport/usePlaybackClock';
+import { StudioInspector, StudioWorkbench } from '../features/studio/Workbench';
+import { useStudioLabels } from '../features/studio/labels';
+import type { Selection } from '../features/studio/edits';
+import { useProjectStore } from '../stores/projectStore';
 import { useUiStore, type Side } from '../stores/uiStore';
-import { layout } from '../features/commands/commands';
+import { layout, runCommand } from '../features/commands/commands';
+import { CodeStudio } from './codeWorkspace';
 import { usePanels } from './registry';
 import { ErrorBoundary } from './ErrorBoundary';
 import { TabbedPanel } from './TabbedPanel';
@@ -27,7 +38,21 @@ function clamp(side: Side, size: number): number {
 }
 
 export function Workspace() {
+  usePlaybackClock();
   const { t } = useTranslation();
+  const label = useStudioLabels();
+  const composition = useProjectStore((state) => state.composition);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const select = useCallback((next: Selection | null) => {
+    setSelection(next);
+    selectCodeClip(next);
+  }, []);
+  useEffect(() => {
+    if (!composition) select(null);
+  }, [composition, select]);
+  useEffect(() => () => selectCodeClip(null), []);
+  const codeVisible = useUiStore((state) => state.workspaceView === 'code');
+  const codeOpened = useUiStore((state) => state.codeOpened);
   const leftRef = usePanelRef();
   const rightRef = usePanelRef();
   const setPanel = useUiStore((s) => s.setPanel);
@@ -89,18 +114,37 @@ export function Workspace() {
               groupResizeBehavior="preserve-pixel-size"
             >
               <div className="h-full pr-gap">
-                <TabbedPanel region="left" label={t('gallery.title')} testId="gallery" />
+                {composition ? <ErrorBoundary scope="gallery.insert">
+                  <StudioTemplateLibrary trackId={selection?.trackId} select={select} />
+                </ErrorBoundary> : <TabbedPanel region="left" label={t('gallery.title')} testId="gallery" />}
               </div>
             </ResizablePanel>
             <ResizableHandle data-testid="handle-left" aria-label={t('layout.resizeHandle')} />
             <ResizablePanel id="center" minSize={320}>
-              <ErrorBoundary scope="preview">
-                <PreviewArea />
-              </ErrorBoundary>
+              <div className={codeVisible ? 'hidden' : 'h-full'}>
+                <ErrorBoundary scope="preview">
+                  <PreviewArea />
+                </ErrorBoundary>
+              </div>
+              {codeOpened && CodeStudio && <Activity mode={codeVisible ? 'visible' : 'hidden'}>
+                <section aria-label={t('workspaceNavigation.authoring')} className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-surface-1" data-testid="workspace-code-editor">
+                  <div className="flex h-panel-head shrink-0 items-center justify-between gap-2 pr-2 pl-3.5">
+                    <h2 className="truncate font-semibold">{t('workspaceNavigation.authoring')}</h2>
+                    <Button size="sm" variant="ghost" onClick={() => runCommand('showPreview')} data-testid="code-back-to-preview">
+                      <ArrowLeft size={ICON.sm} /> {t('workspaceNavigation.backToPreview')}
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <ErrorBoundary scope="code-studio"><Suspense fallback={null}><CodeStudio /></Suspense></ErrorBoundary>
+                  </div>
+                </section>
+              </Activity>}
             </ResizablePanel>
           </ResizablePanelGroup>
           <ErrorBoundary scope="timeline">
-            <TimelinePanel />
+            {composition ? <section aria-label={label('studio')} data-testid="composition-timeline" className="flex h-timeline shrink-0 flex-col overflow-hidden rounded-xl bg-surface-1">
+              <StudioWorkbench doc={composition} selection={selection} select={select} />
+            </section> : <TimelinePanel />}
           </ErrorBoundary>
         </div>
       </ResizablePanel>
@@ -131,7 +175,8 @@ export function Workspace() {
         groupResizeBehavior="preserve-pixel-size"
       >
         <div className="h-full pl-gap">
-          <TabbedPanel region="right" label={t('params.title')} testId="params-panel" />
+          {composition ? <ErrorBoundary scope="studio-inspector"><StudioInspector doc={composition} selection={selection} select={select} /></ErrorBoundary>
+            : <TabbedPanel region="right" label={t('params.title')} testId="params-panel" />}
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>

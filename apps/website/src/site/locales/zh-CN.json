@@ -33,14 +33,14 @@
       "导出带透明通道"
     ],
     "viewerLabel": "预览",
-    "demoAssets": "网页里用的是纯色演示素材；桌面版读取你本机的游戏和资源包。",
+    "demoAssets": "本页未加载游戏贴图。目录素材缺失时显示原创占位。",
     "pick": "选择模板",
     "play": "播放",
     "pause": "暂停",
     "scrub": "时间",
     "starting": "正在启动渲染引擎…",
     "noWebgl": "这个浏览器不支持 WebGL2，看不到实时画面。",
-    "mcAssets": "网页里的方块和物品贴图取自 Minecraft {{version}}，版权归 Mojang / Microsoft，仅用于官网展示；桌面版读取你本机的游戏和资源包，安装包里不含任何游戏文件。",
+    "mcAssets": "本页可用的游戏贴图来自 Minecraft {{version}}，版权归 Mojang / Microsoft；缺少的目录素材显示原创占位。桌面版读取你授权的游戏版本及资源包。",
     "titleC": "发生。",
     "factsLabel": "要点",
     "scrollCue": "向下滚动——你在拖动这一页的播放头"
@@ -147,16 +147,12 @@
   "footer": {
     "disclaimerLabel": "非官方声明",
     "license": "代码以 GPL-3.0 许可证开源。",
-    "fonts": "界面字体 IBM Plex Sans、IBM Plex Mono、Noto Sans SC 与像素字体“方舟像素字体”均以 SIL OFL 1.1 授权。",
-    "fontLicense": "像素字体许可全文",
     "source": "源代码",
     "noTracking": "本站不使用 Cookie、统计或任何第三方资源。",
     "end": "完",
     "tcOut": "出点"
   },
   "host": {
-    "demoPackName": "网页演示色块",
-    "demoPackDescription": "页面里现场生成的纯色色块，不是游戏贴图",
     "exportTarget": "网页演示：每一帧都已渲染，但浏览器里没有 FFmpeg，没有写出文件",
     "mcPackName": "原版贴图 {{version}}",
     "mcPackDescription": "官网展示用：取自正版游戏，版权归 Mojang / Microsoft"

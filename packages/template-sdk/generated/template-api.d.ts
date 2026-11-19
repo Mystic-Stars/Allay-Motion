@@ -18,6 +18,8 @@ export interface StageInfo {
   fps: number;
   /** 输出短边像素 / 1080 */
   pixelScale: number;
+  /** 输出未缩小前的参考像素尺寸；缺省时由 width、height 和 pixelScale 推出。 */
+  referenceSize?: Readonly<{ width: number; height: number }>;
 }
 
 export interface Rng {
@@ -71,6 +73,8 @@ export interface MathHelpers {
 export interface SetupContext {
   /** three.js（r187）。只声明了常用的类和成员，见本文件末尾的 THREE 命名空间；没列出的成员运行时照样可用 */
   THREE: typeof THREE;
+  /** 宿主在装载时提供的语言标签，例如 zh-CN；省略时为 en */
+  readonly locale: string;
   /** 参数值（manifest 的 params 声明）。已经清洗过：类型不对的回到默认值，越界的钳制，缺的补默认值 */
   params: Readonly<ParamValues>;
   /** 舞台：设计单位下的宽高（短边恒为 1080，原点在中心，+y 向上）、宽高比、帧率、像素比例 */
@@ -87,13 +91,22 @@ export interface SetupContext {
   resources: {
     /** 已设好过滤和色彩空间的贴图；缺失时返回占位图并记一条警告。.mcmeta 动画由引擎按 t 自动播放 */
     texture(id: string): Promise<THREE.Texture>;
+    /** 同一已授权资源栈和原 ID；取不到时返回 null，不返回占位贴图。同一资源代内缓存探测结果 */
+    optionalTexture(id: string): Promise<THREE.Texture | null>;
     /** 方块目录里的方块；不认识的 ID 用占位贴图的立方体并记一条警告 */
     block(id: string, opts?: { shading?: boolean }): Promise<BlockHandle>;
     /** 物品目录里的物品（方块 ID 按方块渲染）；不认识的 ID 用占位贴图并记一条警告 */
     item(id: string): Promise<ItemHandle>;
   };
-  /** 用资源栈里的字体排一段文字 */
-  text: { /** 建一个文字对象；字体已在 setup 之前载好，所以是同步的 */ create(opts: TextOptions): TextObject };
+  /** 用资源栈字体及本机系统字体排一段文字 */
+  text: {
+    /** 按 font 参数声明的字体自动预载；程序生成的字体 ID 可在 setup 里显式预载 */
+    prepare(font: string): Promise<void>;
+    /** 量一行 GUI 文字的笔宽和基线边界，与 create 选用相同字形，不创建文字贴图或场景对象。 */
+    measureGui(text: string, font?: string): GuiTextMetrics;
+    /** 同步创建文字；逐字使用已选资源栈字体、minecraft:default、本机系统字体 */
+    create(opts: TextOptions): TextObject;
+  };
   /** 贴图四边形，可带九宫格 */
   sprite: { /** 用一张贴图建精灵；中心在原点 */ create(texture: THREE.Texture, opts?: SpriteOptions): SpriteObject };
   /** 带种子的随机数（种子取模板的 seed 参数）。同一个 key 总是给出同一串数，不同 key 互不影响。在 setup 里预先算好，update 里只查表 */
@@ -107,9 +120,9 @@ export interface SetupContext {
   /** 时间工具 */
   time: { /** t 在 [start, start + duration] 里的进度，钳制到 [0, 1] */ segment(t: number, start: number, duration: number): number };
   /** 音频提示 */
-  audio: { /** 在时刻 at（秒）播放音效事件；只能在 setup 里调用。sound 为 null 时什么也不做 */ cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number }): void };
-  /** 记一条警告，显示在应用里（一次装载最多 50 条） */
-  warn(message: string): void;
+  audio: { /** 在时刻 at（秒）播放音效事件；只能在 setup 里调用。sound 为 null 时什么也不做 */ cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number; position?: readonly [x: number, y: number, z: number] }): void };
+  /** 记一条警告（一次装载最多 50 条）；实际回退时可在 setup 内附上资源提示码，宿主据此显示简短提示。 */
+  warn(message: string, code?: 'panorama-fallback'): void;
 }
 
 /** 方块的六个面：上、下、北（-z）、南（+z，朝向默认相机）、东（+x）、西（-x） */
@@ -150,6 +163,8 @@ export interface ItemHandle {
 
 export interface TextOptions {
   text: string;
+  /** 资源栈字体 ID，默认 minecraft:default。逐字回退到 minecraft:default，再用系统字体；旧字体引用等同默认。 */
+  font?: string;
   /** 一个字体像素对应多少设计单位 */
   size: number;
   /** #RRGGBB，默认白色 */
@@ -158,9 +173,22 @@ export interface TextOptions {
   align?: 'left' | 'center' | 'right';
   /** 设计单位；超过时按空格（中日韩字符逐字）换行 */
   maxWidth?: number;
+  /** 单行 GUI 度量：纵向原点为基线，使用字体的逻辑字号而非源像素尺寸。 */
+  origin?: 'guiBaseline';
 }
 
-/** 文字对象。原点：水平方向按 align（左边、中点、右边），垂直方向在整段文字的中线 */
+export interface GuiTextMetrics {
+  /** 以 GUI 像素计的笔尖前进量和绘制宽度。 */
+  advance: number;
+  width: number;
+  /** 字形越出笔尖左侧时为负，单位为 GUI 像素。 */
+  left: number;
+  /** 字形范围在基线以上、以下的 GUI 像素数。 */
+  above: number;
+  below: number;
+}
+
+/** 文字对象。默认纵向原点在整段文字中线；guiBaseline 模式用基线，左对齐以笔尖为横向原点。 */
 export interface TextObject {
   /** 加到场景里 */
   object: THREE.Object3D;
@@ -188,11 +216,20 @@ export interface SpriteObject {
   setOpacity(opacity: number): void;
 }
 
+/** 已生效的阶段时长（秒），键与 manifest.timeline.segments 对应。 */
+export interface EffectiveTiming {
+  durations: Readonly<Record<string, number>>;
+  /** 当前阶段是否由对应的 duration 参数控制。 */
+  editable: boolean;
+}
+
 export interface TemplateInstance {
   /** 秒，0.1–30 */
   duration: number;
   /** 转场类必填 */
   cutTime?: number | null;
+  /** 参数与实际阶段不一定相等时，返回这次装载使用的时长。 */
+  timing?: EffectiveTiming;
   /** 把画面摆到时刻 t（秒）。只能依赖 t 和 setup 时建立的状态；引擎可能按任意顺序、多次调用 */
   update(t: number): void;
   /** 释放 setup 里自己创建的几何体、材质、贴图 */
@@ -388,6 +425,7 @@ export declare namespace THREE {
     userData: Record<string, unknown>;
     add(...object: Object3D[]): this;
     remove(...object: Object3D[]): this;
+    removeFromParent(): this;
     clear(): this;
     traverse(callback: (object: Object3D) => unknown): void;
     lookAt(x: number, y: number, z: number): void;
@@ -445,14 +483,20 @@ export declare namespace THREE {
     getY(index: number): number;
     getZ(index: number): number;
     getW(index: number): number;
+    setXY(index: number, x: number, y: number): this;
     setXYZ(index: number, x: number, y: number, z: number): this;
   }
+
+  const Float32BufferAttribute: {
+    new (array: Iterable<number> | ArrayLike<number> | ArrayBuffer | number, itemSize: number, normalized?: boolean): BufferAttribute;
+  };
 
   class BufferGeometry {
     constructor();
     readonly isBufferGeometry: boolean;
     groups: Array<{ start: number; count: number; materialIndex?: number | undefined }>;
     getAttribute(name: string): BufferAttribute | undefined;
+    setAttribute(name: string, attribute: BufferAttribute): this;
     getIndex(): BufferAttribute | null;
     translate(x: number, y: number, z: number): this;
     scale(x: number, y: number, z: number): this;
@@ -557,6 +601,7 @@ export declare namespace THREE {
     readonly offset: Vector2;
     readonly repeat: Vector2;
     needsUpdate: boolean;
+    clone(): this;
     dispose(): void;
   }
 

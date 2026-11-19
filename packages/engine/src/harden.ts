@@ -1,7 +1,7 @@
 // Worker 的纵深防御（docs/02-engine.md 2.4、01-product-architecture.md 1.6 第 7 条）。
 // 真正的边界是会话级网络拦截和 CSP；这里只是让模板脚本“手边没有”联网和存储的接口。
 
-/** 2.4 列出的全局，外加 WebTransport（同样能联网） */
+/** 2.4 列出的全局，外加 WebTransport 和可信文字模块已捕获的字体集合。 */
 export const REMOVED_GLOBALS = [
   'fetch',
   'XMLHttpRequest',
@@ -12,6 +12,7 @@ export const REMOVED_GLOBALS = [
   'importScripts',
   'BroadcastChannel',
   'WebTransport',
+  'fonts',
 ] as const;
 
 /**

@@ -31,7 +31,7 @@
 7. **不引入 GSAP 和 Theatre.js。** 原因在 `docs/09-compliance.md` 9.8。
 8. **导出的色彩和透明通道照 `docs/05-export.md` 5.4 做。** 那些要求来自实测，不是风格偏好。
 9. **品牌资产只放在 `packages/mascot` 和 `packages/ui/src/brand/`。** 其他地方的用户可见文字里不写死产品名和“悦灵”。
-10. **应用不联网。** 不加遥测、在线素材、崩溃上报。例外只有两处，都由用户授权、只在主进程、边界写死在各自的文件里：运行时从 Mojang 下载原版素材（`docs/decisions.md` M2a）和从本仓库的 GitHub / GitCode Release 自动更新（`docs/decisions.md`“自动更新”，可在设置里关闭）。
+10. **应用默认离线。** 不加遥测、在线素材库、崩溃上报。联网例外都由用户授权、只在主进程、边界写死在各自的文件里：运行时从 Mojang 下载原版素材（`docs/decisions.md` M2a）；用户主动按 Java 正版玩家名获取公开皮肤，每次单独同意，仅访问写死的官方端点（`docs/09-compliance.md` 9.10）；以及从本仓库的 GitHub / GitCode Release 自动更新（`docs/decisions.md`“自动更新”，可在设置里关闭）。皮肤例外不含登录、文件上传或后台查名。
 11. **按约定的发版流程发布。** 推送 `v*` 标签会在构建和打包检查通过后自动发布，并同步到 GitCode；不要擅自创建发版标签。
 
 ## 怎么干活

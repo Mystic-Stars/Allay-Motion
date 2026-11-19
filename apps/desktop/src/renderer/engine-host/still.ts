@@ -2,7 +2,7 @@
 // 按帧号或时刻渲染成直通 alpha 的 RGBA 图，尺寸有上限（最长边不超过 STILL_MAX_EDGE，超过时等比缩小）。
 // 模板封面和悬停预览、评审截图、测试钩子都经它；将来可能的 MCP 的 render_frames 也只会经它（届时再收紧上限）。
 import { frameCount } from '@allay/engine/frames';
-import type { FrameQuality, ParamValues } from '@allay/template-sdk';
+import type { FrameQuality, LoadRequest, ParamValues } from '@allay/template-sdk';
 import type { TemplateSource } from '../templates/catalog';
 import { EngineHost } from './EngineHost';
 import { createResolver, loadStamp } from './resource-client';
@@ -20,12 +20,16 @@ export interface StillRequest {
   /** 想要的尺寸；最长边超过 maxEdge（缺省 STILL_MAX_EDGE，也不能超过它）时等比缩小 */
   width: number;
   height: number;
+  /** 缩略图可显式指定原输出尺寸；否则用缩小前的 width / height。 */
+  referenceSize?: LoadRequest['referenceSize'];
   fps: number;
   maxEdge?: number;
   locale: string;
+  profileId?: string;
 }
 
 export interface StillSession {
+  usesPlaceholder: boolean;
   /** 实际的渲染尺寸（已按上限缩小） */
   width: number;
   height: number;
@@ -51,10 +55,12 @@ export function clampStillSize(width: number, height: number, maxEdge = STILL_MA
  * 在 host（杂务或导出模式）里装载 req 的模板，返回可以逐帧取图的会话。
  * host 由调用方管理（封面一批模板共用一个 Worker）；会话在 host 装载别的模板之后失效。
  */
-export async function openStill(host: EngineHost, req: StillRequest): Promise<StillSession> {
+export async function openStill(host: Pick<EngineHost, 'load' | 'renderFrame'>, req: StillRequest): Promise<StillSession> {
   const size = clampStillSize(req.width, req.height, req.maxEdge);
   const output = { ...size, fps: req.fps };
-  const loaded = await host.load({ manifest: req.source.manifest, code: req.source.code, params: req.params, output, resourceStamp: loadStamp(req.source.assets), locale: req.locale });
+  const referenceSize = req.referenceSize ?? ((size.width !== req.width || size.height !== req.height) ? { width: req.width, height: req.height } : undefined);
+  const loaded = await host.load({ manifest: req.source.manifest, code: req.source.code, params: req.params, output, referenceSize,
+    resourceStamp: loadStamp(req.source.assets, req.profileId), locale: req.locale });
   const total = frameCount(loaded.duration, req.fps);
   let rendered = 0;
   const frame = async (index: number, quality: FrameQuality = STILL_FAST): Promise<ImageData> => {
@@ -65,6 +71,7 @@ export async function openStill(host: EngineHost, req: StillRequest): Promise<St
   };
   return {
     ...size,
+    usesPlaceholder: loaded.resourceNotices?.includes('catalog-placeholder') ?? false,
     fps: req.fps,
     duration: loaded.duration,
     cutTime: loaded.cutTime,
@@ -76,7 +83,7 @@ export async function openStill(host: EngineHost, req: StillRequest): Promise<St
 
 /** 渲染单独一张（自己建、用完就销毁杂务 Worker），编码成 PNG */
 export async function renderStillPng(req: StillRequest & { t: number; quality?: FrameQuality }): Promise<{ png: Uint8Array; width: number; height: number }> {
-  const host = await EngineHost.create({ mode: 'utility', resolveResource: createResolver(() => req.source.assets) });
+  const host = await EngineHost.create({ mode: 'utility', resolveResource: createResolver(() => req.source.assets, req.profileId) });
   try {
     const session = await openStill(host, req);
     const img = await session.at(req.t, req.quality);

@@ -10,9 +10,9 @@ import { buildDiagnostics, uncaughtLine } from '../../apps/desktop/src/renderer/
 import { describeLoadIssues, loadIssuesOf } from '../../apps/desktop/src/renderer/features/preview/loadIssues';
 import { rendererErrorLimiter } from '../../apps/desktop/src/main/renderer-log';
 import { effectiveManifest, LoadRequestSchema, parseManifest, resolveDerived, resolveScript, type TemplateManifest } from '../../packages/template-sdk/src/index';
+import { catalogNames } from '../fixtures/builtin-catalog';
 
 const ROOT = join(import.meta.dirname, '../..');
-const BUILTINS = ['block-wipe', 'block-fall', 'item-stinger', 'advancement-toast', 'loading-screen', 'pixel-dissolve'];
 
 function builtin(name: string): TemplateManifest {
   const r = parseManifest(JSON.parse(readFileSync(join(ROOT, 'packages/templates', name, 'manifest.json'), 'utf8')));
@@ -49,7 +49,7 @@ describe('缺陷 2：派生模板的生效 manifest 带上基模板的参数分�
     expect(r.success, r.success ? '' : JSON.stringify(r.error.issues.slice(0, 3))).toBe(true);
   });
 
-  it.each(BUILTINS)('%s：脚本模板和由它派生的模板，生效 manifest 都合法', (name) => {
+  it.each(catalogNames)('%s：脚本模板和由它派生的模板，生效 manifest 都合法', (name) => {
     const base = builtin(name);
     for (const m of [effectiveManifest(resolveScript(base)), effectiveManifest(resolveDerived(derivedOf(base), base))]) {
       expect(parseManifest(m).ok).toBe(true);

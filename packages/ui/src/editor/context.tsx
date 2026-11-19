@@ -19,6 +19,11 @@ export interface CatalogGroup {
 export interface SoundLibraryItem {
   id: string;
   state: 'local' | 'remote' | 'missing';
+  kind: 'effect' | 'music';
+  names: { 'zh-CN'?: string; en?: string; chinese: 'subtitle' | 'terminology' | 'missing' | 'custom' };
+  source: 'vanilla' | 'pack-new' | 'definition-override' | 'file-override' | 'builtin' | 'imported';
+  fileOverride?: boolean;
+  variantCount: number;
 }
 
 export type RecentKind = 'color' | 'block' | 'item' | 'texture';
@@ -45,6 +50,8 @@ export interface EditorServices {
   pickImage(): Promise<{ value: string; name: string } | null>;
   /** 资源栈里可选的贴图 ID（目录里方块和物品用到的贴图） */
   textureIds: readonly string[];
+  /** 字体来源由宿主提供，动画字体不会用于编辑器自身。 */
+  renderFont?(props: { value: string; onChange(value: string): void; label: string; testId: string }): ReactNode;
   /**
    * 音效选择器的库（M6b）：library 是资源栈合并后的 sounds.json 里的全部事件（按 ID 排序）；
    * common 是规格 3.8 的常用事件（置顶，只显示库里有的）。没有素材层时 library 为空
@@ -54,6 +61,8 @@ export interface EditorServices {
   previewSound?(id: string): void;
   /** 用户在选择器里选中了一个音效（宿主按需取回还没下载的文件） */
   prepareSound?(id: string): void;
+  importSound?(kind: SoundLibraryItem['kind']): Promise<string | null>;
+  fetchSoundNames?(): Promise<void>;
   recent(kind: RecentKind): readonly string[];
   addRecent(kind: RecentKind, value: string): void;
   /** 一次连续操作（拖滑块、拖数字）开始和结束：之间的改动只算一条撤销记录（1.7） */

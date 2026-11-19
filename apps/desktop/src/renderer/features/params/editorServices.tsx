@@ -8,8 +8,9 @@ import { beginGesture, endGesture, useProjectStore } from '../../stores/projectS
 import { useResourceStore } from '../../stores/resourceStore';
 import { useUiStore } from '../../stores/uiStore';
 import { previewAudio } from '../../audio/app-audio';
-import { prepareSound, useSoundLibraryStore } from '../../audio/sound-library';
+import { fetchSoundNames, importSound, prepareSound, useSoundLibraryStore } from '../../audio/sound-library';
 import { thumbnails } from '../thumbnails/thumbnails';
+import { FontField } from '../fonts/FontField';
 
 /** 方块目录按 03-assets.md 3.7 的分组顺序排列；按顺序切成这几组 */
 const BLOCK_GROUP_SIZES: [string, number][] = [
@@ -90,6 +91,7 @@ export function EditorServicesProvider({ children }: { children: ReactNode }) {
   const recent = useUiStore((s) => s.settings.editor.recent);
   const soundEvents = useSoundLibraryStore((s) => s.events);
   const soundsLoading = useSoundLibraryStore((s) => s.loading);
+  const namesDownloadable = useSoundLibraryStore((s) => s.namesDownloadable);
   const value = useMemo<EditorServices>(() => {
     const blockGroups: CatalogGroup[] = BLOCK_GROUP_SIZES.map(([key]) => ({ key, label: t(`editor.picker.groups.${key}`) }));
     const itemGroups: CatalogGroup[] = [{ key: 'items', label: t('editor.picker.groups.items') }];
@@ -106,9 +108,12 @@ export function EditorServicesProvider({ children }: { children: ReactNode }) {
       thumbnail: async (kind, id) => (await thumbnails.get(kind, id, 64))?.url ?? null,
       texturePreview,
       textureIds: TEXTURE_IDS,
+      renderFont: (props) => <FontField {...props} />,
       sounds: { library: soundEvents, common: SOUND_EVENTS, loading: soundsLoading },
       previewSound: (id) => void previewAudio.preview(id),
       prepareSound: (id) => void prepareSound(id),
+      importSound,
+      ...(namesDownloadable ? { fetchSoundNames } : {}),
       async pickImage() {
         const picked = await window.allay.files.pickImage();
         if (!picked) return null;
@@ -129,6 +134,6 @@ export function EditorServicesProvider({ children }: { children: ReactNode }) {
         </div>
       ),
     };
-  }, [t, i18n.language, fps, hasAssets, stamp, recent, soundEvents, soundsLoading]);
+  }, [t, i18n.language, fps, hasAssets, stamp, recent, soundEvents, soundsLoading, namesDownloadable]);
   return <EditorProvider value={value}>{children}</EditorProvider>;
 }

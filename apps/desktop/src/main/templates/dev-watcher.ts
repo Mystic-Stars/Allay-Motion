@@ -8,11 +8,12 @@
 // - 对外是一个事件：{ id, version, change: added | changed | removed, hash }。
 import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { basename, join, relative, sep } from 'node:path';
+import { lstat, mkdir, readdir } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { isValidVersion, TEMPLATE_ID_RE } from '@allay/template-sdk';
 import { isTemplateContentPath } from '../../shared/template-dev';
 import type { Logger } from '../logger';
+import { readRegular, safeTemplateDir } from './source-files';
 
 export type TemplateChangeKind = 'added' | 'changed' | 'removed';
 
@@ -48,6 +49,7 @@ async function contentFiles(dir: string, prefix = ''): Promise<string[]> {
   const out: string[] = [];
   let entries;
   try {
+    if (!(await lstat(join(dir, prefix))).isDirectory()) return out;
     entries = await readdir(join(dir, prefix), { withFileTypes: true });
   } catch {
     return out;
@@ -68,13 +70,14 @@ export async function hashTemplateDir(dir: string): Promise<string | null> {
   if (!files.includes('manifest.json')) return null;
   const h = createHash('sha256');
   for (const rel of files) {
-    let data: Buffer;
+    let data: Buffer | null;
     try {
-      data = await readFile(join(dir, ...rel.split('/')));
+      data = await readRegular(join(dir, ...rel.split('/')), 64 * 1024 * 1024);
     } catch {
       // 读的时候正好被删或被改名：下一个事件会再算一次
       continue;
     }
+    if (!data) continue;
     h.update(rel);
     h.update('\0');
     h.update(String(data.byteLength));
@@ -108,7 +111,8 @@ export class TemplateWatcher {
     if (this.watcher || this.closed) return;
     await mkdir(this.opts.root, { recursive: true });
     for (const [id, version] of await this.listTemplates()) {
-      const h = await hashTemplateDir(join(this.opts.root, id, version));
+      const dir = await this.resolveDir(id, version);
+      const h = dir && await hashTemplateDir(dir);
       if (h) this.hashes.set(key(id, version), h);
     }
     const w = watch(this.opts.root, { recursive: true, persistent: false }, (_type, filename) => this.onRaw(filename));
@@ -149,7 +153,8 @@ export class TemplateWatcher {
       return await fn();
     } finally {
       try {
-        const h = await hashTemplateDir(join(this.opts.root, id, version));
+        const dir = await this.resolveDir(id, version);
+        const h = dir && await hashTemplateDir(dir);
         if (h) this.hashes.set(k, h);
         else this.hashes.delete(k);
       } finally {
@@ -165,17 +170,7 @@ export class TemplateWatcher {
    * 不满足时为 null。目录不存在时也为 null。
    */
   async resolveDir(id: string, version: string): Promise<string | null> {
-    if (!TEMPLATE_ID_RE.test(id) || !isValidVersion(version)) return null;
-    const dir = join(this.opts.root, id, version);
-    try {
-      const [real, rootReal] = await Promise.all([realpath(dir), realpath(this.opts.root)]);
-      const rel = relative(rootReal, real);
-      if (rel === '' || rel.startsWith('..') || rel.includes(':') || rel.split(sep).length !== 2) return null;
-      if (!(await stat(real)).isDirectory()) return null;
-      return real;
-    } catch {
-      return null;
-    }
+    return safeTemplateDir(this.opts.root, id, version);
   }
 
   // ---- 内部 ----
@@ -185,6 +180,7 @@ export class TemplateWatcher {
     const ids = await readdir(this.opts.root).catch(() => [] as string[]);
     for (const id of ids) {
       if (!TEMPLATE_ID_RE.test(id)) continue;
+      if (!(await lstat(join(this.opts.root, id)).catch(() => null))?.isDirectory()) continue;
       for (const version of await readdir(join(this.opts.root, id)).catch(() => [] as string[])) {
         if (isValidVersion(version)) out.push([id, version]);
       }
@@ -218,7 +214,8 @@ export class TemplateWatcher {
   }
 
   private async rescanId(id: string): Promise<void> {
-    const versions = new Set(await readdir(join(this.opts.root, id)).catch(() => [] as string[]));
+    const parent = join(this.opts.root, id);
+    const versions = new Set((await lstat(parent).catch(() => null))?.isDirectory() ? await readdir(parent).catch(() => []) : []);
     for (const k of this.hashes.keys()) if (k.startsWith(`${id}@`)) versions.add(k.slice(id.length + 1));
     for (const v of versions) if (isValidVersion(v)) this.schedule(id, v);
   }
@@ -260,7 +257,8 @@ export class TemplateWatcher {
     const k = key(id, version);
     // 自己正在写：写完时 ownWrite 会更新哈希，之后的事件按新哈希比较
     if (this.muted.has(k)) return;
-    const hash = await hashTemplateDir(join(this.opts.root, id, version));
+    const dir = await this.resolveDir(id, version);
+    const hash = dir && await hashTemplateDir(dir);
     if (this.muted.has(k) || this.closed) return;
     const prev = this.hashes.get(k) ?? null;
     if (hash === prev) return;

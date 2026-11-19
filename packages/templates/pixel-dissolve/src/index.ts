@@ -35,6 +35,8 @@ uniform vec3 uColor;
 uniform vec3 uAccent;
 uniform float uUseTex;
 uniform sampler2D uTex;
+uniform vec2 uTexRepeat;
+uniform vec2 uTexOffset;
 varying vec2 vUv;
 void main() {
   vec2 p = (vUv - 0.5) * uStage;
@@ -54,7 +56,7 @@ void main() {
   }
   vec3 col;
   if (accent) col = uAccent;
-  else if (uUseTex > 0.5) col = textureGrad(uTex, fract(g), dFdx(g), dFdy(g)).rgb;
+  else if (uUseTex > 0.5) col = textureGrad(uTex, fract(g) * uTexRepeat + uTexOffset, dFdx(g) * uTexRepeat, dFdy(g) * uTexRepeat).rgb;
   else col = uColor;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -143,6 +145,8 @@ const template: TemplateModule = {
       uAccent: { value: new THREE.Color(str(params.accentColor, '#52CFF3').slice(0, 7)) },
       uUseTex: { value: fillTexture ? 1 : 0 },
       uTex: { value: fillTexture },
+      uTexRepeat: { value: fillTexture?.repeat ?? new THREE.Vector2(1, 1) },
+      uTexOffset: { value: fillTexture?.offset ?? new THREE.Vector2() },
     };
     const geometry = new THREE.PlaneGeometry(W, H);
     // transparent：走 Three 默认的 NormalBlending，画进缓冲的是预乘 alpha（02-engine.md 2.6）

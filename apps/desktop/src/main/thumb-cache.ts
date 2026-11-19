@@ -1,5 +1,4 @@
-// 缩略图的磁盘缓存（docs/03-assets.md 3.10、01-product-architecture.md 1.9 的 cache/thumbs/）。
-// 按 resourceStamp 分目录：cache/thumbs/<stamp>/<键>.png。写入新 stamp 时删掉旧 stamp 的目录（资源栈一变就失效）。
+// 缩略图的磁盘缓存（docs/03-assets.md 3.10）。按渲染版本、resourceStamp 分目录，不复用旧字体的渲染结果。
 // 键和 stamp 都已由 IPC 的 schema 校验过（只含安全字符），这里再确认一次路径落在缓存目录里。
 import { randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -11,7 +10,7 @@ export class ThumbCache {
   private readonly root: string;
 
   constructor(userDataDir: string) {
-    this.root = resolve(userDataDir, 'cache', 'thumbs');
+    this.root = resolve(userDataDir, 'cache', 'thumbs-v2');
   }
 
   get dir(): string {

@@ -1,6 +1,7 @@
 // 导出的共享定义（docs/05-export.md）：预设 ID、请求与结果的 schema、错误码、编码器探测的结果，
 // 以及几个纯函数（偶数修正、文件名、体积估算）。主进程和渲染进程共用；进程边界用这里的 schema 校验。
 import { z } from 'zod';
+import { COMPOSITION_MAX_SECONDS, CompositionFpsSchema } from '@allay/template-sdk';
 
 /** 四个预设，顺序就是对话框里格式卡片的顺序（5.3） */
 export const EXPORT_PRESETS = ['prores4444', 'png-sequence', 'webm-vp9', 'greenscreen-mp4'] as const;
@@ -28,8 +29,7 @@ export function evenDimension(value: number): number {
   return clamped - (clamped % 2);
 }
 
-/** 30 秒 × 60 fps，再加首尾两帧的余量 */
-export const MAX_EXPORT_FRAMES = 30 * 60 + 2;
+export const MAX_EXPORT_FRAMES = COMPOSITION_MAX_SECONDS * 60;
 
 /** 绿幕的底色（#RRGGBB） */
 export const KeyColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -40,7 +40,7 @@ export const ExportStartSchema = z.strictObject({
   preset: ExportPresetSchema,
   width: Dimension,
   height: Dimension,
-  fps: z.union(EXPORT_FPS.map((f) => z.literal(f)) as [z.ZodLiteral<24>, z.ZodLiteral<25>, z.ZodLiteral<30>, z.ZodLiteral<50>, z.ZodLiteral<60>]),
+  fps: CompositionFpsSchema,
   totalFrames: z.int().min(1).max(MAX_EXPORT_FRAMES),
   /** 剪辑点所在的帧；叠加层模板没有 */
   cutFrame: z.int().min(0).max(MAX_EXPORT_FRAMES).nullable(),
@@ -51,7 +51,8 @@ export const ExportStartSchema = z.strictObject({
   suggestedName: z.string().min(1).max(120),
   /** 有音轨（5.5）：为真时主进程等 writeAudio 交来混音后才启动 FFmpeg。缺省为没有 */
   audio: z.boolean().optional(),
-});
+}).refine(({ totalFrames, fps, cutFrame }) => totalFrames <= COMPOSITION_MAX_SECONDS * fps && (cutFrame === null || cutFrame < totalFrames),
+  { message: 'export duration or cut frame outside frame boundaries' });
 export type ExportStartRequest = z.infer<typeof ExportStartSchema>;
 
 export const ExportJobIdSchema = z.uuid();
@@ -65,8 +66,8 @@ export const FramePixelsSchema = z.instanceof(Uint8Array).refine((b) => b.byteLe
 /** 混音的格式（5.5）：48 kHz、立体声、16 位 PCM 的 WAV */
 export const AUDIO_SAMPLE_RATE = 48_000;
 export const AUDIO_CHANNELS = 2;
-/** WAV 最大字节数：31 秒（30 秒加余量）的 48 kHz 立体声 16 位，再加头部 */
-export const MAX_AUDIO_BYTES = 31 * AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * 2 + 1024;
+/** WAV 最大字节数：300 秒的 48 kHz 立体声 16 位，再加头部 */
+export const MAX_AUDIO_BYTES = COMPOSITION_MAX_SECONDS * AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * 2 + 1024;
 export const AudioWavSchema = z.instanceof(Uint8Array).refine((b) => b.byteLength > 44 && b.byteLength <= MAX_AUDIO_BYTES, {
   message: 'audio size out of range',
 });

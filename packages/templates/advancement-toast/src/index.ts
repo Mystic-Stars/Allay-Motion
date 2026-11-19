@@ -3,6 +3,8 @@
 //
 // 布局以“界面像素”计（面板原生 160×32），一个界面像素 = g 个设计单位。
 import type { ParamValue, SetupContext, TemplateInstance, TemplateModule } from '@allay/template-sdk';
+import { setupVersionedToast, toastProfile } from './versioned';
+import { setupBedrockAchievement } from './bedrock';
 
 const num = (v: ParamValue | undefined, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const str = (v: ParamValue | undefined, fallback: string): string => (typeof v === 'string' ? v : fallback);
@@ -27,6 +29,9 @@ const FRAME_COLOR: Record<string, string> = { task: '#FFFF55', goal: '#FFFF55', 
 const template: TemplateModule = {
   async setup(ctx: SetupContext): Promise<TemplateInstance> {
     const { THREE, stage, scene, params } = ctx;
+    if (params.toastStyle === 'bedrockAchievement') return setupBedrockAchievement(ctx);
+    const profile = toastProfile(params.toastStyle);
+    if (profile) return setupVersionedToast(ctx, profile);
     const W = stage.width;
     const H = stage.height;
     const frame = str(params.frame, 'task');
@@ -42,8 +47,8 @@ const template: TemplateModule = {
     const duration = inDuration + hold + outDuration;
 
     // 文字先按 guiScale 建好，量出以界面像素计的尺寸（文字的宽高与字号成正比）
-    const header = ctx.text.create({ text: str(params.header, ''), size: guiScale, color: headerColor, align: 'left' });
-    const title = ctx.text.create({ text: str(params.title, ''), size: guiScale, color: str(params.titleColor, '#FFFFFF'), align: 'left' });
+    const header = ctx.text.create({ text: str(params.header, ''), font: str(params.headerFont, 'minecraft:default'), size: guiScale, color: headerColor, align: 'left' });
+    const title = ctx.text.create({ text: str(params.title, ''), font: str(params.titleFont, 'minecraft:default'), size: guiScale, color: str(params.titleColor, '#FFFFFF'), align: 'left' });
     const hw = header.width / guiScale;
     const hh = header.height / guiScale;
     const tw = title.width / guiScale;

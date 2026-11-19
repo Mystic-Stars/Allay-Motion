@@ -100,7 +100,7 @@ ${theme('dark')}
 ${theme('light')}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;background:transparent;overflow:hidden;user-select:none;cursor:default}
-body{font-family:"IBM Plex Sans","Noto Sans SC","Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--foreground)}
+body{font-family:system-ui,sans-serif;color:var(--foreground)}
 .card{position:absolute;inset:0;border-radius:12px;background:var(--background);border:1px solid var(--divider);overflow:hidden;display:flex;flex-direction:column;align-items:center;-webkit-app-region:drag}
 .stage{position:relative;width:100%;height:${SPRITE + 22}px;flex:none}
 .flyer{position:absolute;left:calc(50% - ${SPRITE / 2}px);top:14px;width:${SPRITE}px;height:${SPRITE}px;animation:fly-in 600ms cubic-bezier(.2,.8,.2,1) both;pointer-events:none}

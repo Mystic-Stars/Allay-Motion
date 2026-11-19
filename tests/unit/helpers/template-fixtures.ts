@@ -1,10 +1,10 @@
 // 模板包夹具：在测试时用脚本生成，不提交二进制。PNG 是纯色色块，只是测试数据。
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { writeZip } from '../../../apps/desktop/src/main/templates/zip-writer';
 import { createLogger } from '../../../apps/desktop/src/main/logger';
 import { TemplateService } from '../../../apps/desktop/src/main/templates/service';
-import { buildTemplates } from '../../../scripts/build-templates';
+import { packTemplate, TEMPLATES_SRC } from '../../../scripts/build-templates';
 import { solidPng } from './resource-fixtures';
 
 export const log = createLogger(null, false);
@@ -79,8 +79,12 @@ export const derivedPackage = (over: Record<string, unknown> = {}, extra: Entrie
 });
 
 /** 打一份真实的内置模板目录（pnpm templates:build 的产物）到 dir */
-export async function buildBuiltins(dir: string): Promise<void> {
-  await buildTemplates(dir);
+export async function buildBuiltins(dir: string, names: readonly string[] = ['block-wipe']): Promise<void> {
+  mkdirSync(dir, { recursive: true });
+  for (const name of names) {
+    const { fileName, zip } = await packTemplate(join(TEMPLATES_SRC, name));
+    writeFileSync(join(dir, fileName), zip);
+  }
 }
 
 export async function makeService(userDataDir: string, builtinDir: string, appVersion = '0.1.0'): Promise<TemplateService> {

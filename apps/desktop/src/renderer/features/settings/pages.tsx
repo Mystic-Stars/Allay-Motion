@@ -14,6 +14,7 @@ import { useUiStore } from '../../stores/uiStore';
 import { useExportInfo } from '../export/exportInfo';
 import { formatBytes } from '../resources/DownloadProgress';
 import { ResourceStackPanel } from '../resources/ResourceStackPanel';
+import { VersionLibrary } from '../resources/VersionLibrary';
 import { MotionChoice, ThemeChoice } from './choices';
 import { CONTROL_W, SettingsPageHeader, SettingsRow, SettingsSection } from './layout';
 import { OutputSettingsForm } from './OutputSettingsForm';
@@ -88,8 +89,11 @@ export function AssetsPage() {
   return (
     <div className="flex flex-col">
       <SettingsPageHeader title={t('settings.pages.assets')} description={t('settings.descriptions.assets')} />
+      <SettingsSection title={t('resources.library.title')}>
+        <div className="@container"><VersionLibrary /></div>
+      </SettingsSection>
       <SettingsSection title={t('settings.assetsStack')}>
-        <ResourceStackPanel />
+        <ResourceStackPanel management />
       </SettingsSection>
       <SettingsSection title={t('settings.cacheTitle')}>
         <SettingsRow

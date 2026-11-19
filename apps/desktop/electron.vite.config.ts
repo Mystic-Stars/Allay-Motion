@@ -16,9 +16,13 @@ export default defineConfig({
   preload: {
     build: {
       externalizeDeps: false,
+      isolatedEntries: true,
       outDir: 'out/preload',
       rollupOptions: {
-        input: { index: resolve(import.meta.dirname, 'src/preload/index.ts') },
+        input: {
+          index: resolve(import.meta.dirname, 'src/preload/index.ts'),
+          'code-inspector': resolve(import.meta.dirname, 'src/preload/code-inspector.ts'),
+        },
         output: { format: 'cjs' },
       },
     },
@@ -35,7 +39,12 @@ export default defineConfig({
       outDir: 'out/renderer',
       // CSP 的 font-src 只允许 'self'，不要把字体等资源内联成 data: URI
       assetsInlineLimit: 0,
-      rollupOptions: { input: { index: resolve(import.meta.dirname, 'src/renderer/index.html') } },
+      rollupOptions: {
+        input: {
+          index: resolve(import.meta.dirname, 'src/renderer/index.html'),
+          'code-inspector': resolve(import.meta.dirname, 'src/renderer/code-inspector.html'),
+        },
+      },
     },
     server: { port: 5173, strictPort: true, host: 'localhost' },
   },

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { shortcutFromEvent } from '../../../shared/shortcuts';
 import { commandEnabled, getCommand, trigger } from '../../app/registry';
+import { isNativeTextEditing } from '../../app/mainCommands';
+import { hasNativeMacChrome } from '../../app/titlebarChrome';
 import { stepFrames } from './commands';
 import { commandForShortcut } from './shortcutState';
 import { onboardingVisible, tourVisible, useUiStore } from '../../stores/uiStore';
@@ -49,6 +51,7 @@ export function useShortcuts(): void {
       }
       const shortcut = shortcutFromEvent(e);
       if (!shortcut) return;
+      if (hasNativeMacChrome() && (shortcut === 'Ctrl+Z' || shortcut === 'Ctrl+Shift+Z') && isNativeTextEditing()) return;
       const id = commandForShortcut(shortcut);
       const cmd = id ? getCommand(id) : undefined;
       if (!cmd || !commandEnabled(cmd)) return;

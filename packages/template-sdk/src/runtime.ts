@@ -14,6 +14,8 @@ export interface StageInfo {
   fps: number;
   /** 输出短边像素 / 1080 */
   pixelScale: number;
+  /** 输出未缩小前的参考像素尺寸；缺省时由 width、height 和 pixelScale 推出。 */
+  referenceSize?: Readonly<{ width: number; height: number }>;
 }
 
 export interface Rng {
@@ -60,6 +62,8 @@ export interface MathHelpers {
 
 export interface SetupContext {
   THREE: typeof THREE;
+  /** 宿主在装载时提供的语言标签，例如 zh-CN；省略时为 en */
+  readonly locale: string;
   params: Readonly<ParamValues>;
   stage: Readonly<StageInfo>;
   scene: THREE.Scene;
@@ -69,20 +73,28 @@ export interface SetupContext {
   resources: {
     /** 已设好过滤和色彩空间的贴图；缺失时返回占位图并记一条警告。.mcmeta 动画由引擎按 t 自动播放 */
     texture(id: string): Promise<THREE.Texture>;
+    /** 同一已授权资源栈和原 ID；取不到时返回 null，不返回占位贴图。同一资源代内缓存探测结果 */
+    optionalTexture(id: string): Promise<THREE.Texture | null>;
     /** 方块目录里的方块；不认识的 ID 用占位贴图的立方体并记一条警告 */
     block(id: string, opts?: { shading?: boolean }): Promise<BlockHandle>;
     /** 物品目录里的物品（方块 ID 按方块渲染）；不认识的 ID 用占位贴图并记一条警告 */
     item(id: string): Promise<ItemHandle>;
   };
-  text: { create(opts: TextOptions): TextObject };
+  text: {
+    /** 按 font 参数声明的字体自动预载；程序生成的字体 ID 可在 setup 里显式预载 */
+    prepare(font: string): Promise<void>;
+    /** 量一行 GUI 文字的笔宽和基线边界，与 create 选用相同字形，不创建文字贴图或场景对象。 */
+    measureGui(text: string, font?: string): GuiTextMetrics;
+    create(opts: TextOptions): TextObject;
+  };
   sprite: { create(texture: THREE.Texture, opts?: SpriteOptions): SpriteObject };
   random(key?: string): Rng;
   noise2D(x: number, y: number, key?: string): number;
   ease: EaseLibrary;
   math: MathHelpers;
   time: { segment(t: number, start: number, duration: number): number };
-  audio: { cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number }): void };
-  warn(message: string): void;
+  audio: { cue(sound: string | null, at: number, opts?: { gain?: number; rate?: number; pan?: number; position?: readonly [x: number, y: number, z: number] }): void };
+  warn(message: string, code?: 'panorama-fallback'): void;
 }
 
 /** 方块的六个面：上、下、北（-z）、南（+z，朝向默认相机）、东（+x）、西（-x） */
@@ -118,6 +130,8 @@ export interface ItemHandle {
 
 export interface TextOptions {
   text: string;
+  /** 资源栈字体 ID，默认 minecraft:default。逐字回退到 minecraft:default，再用系统字体；旧字体引用等同默认。 */
+  font?: string;
   /** 一个字体像素对应多少设计单位 */
   size: number;
   /** #RRGGBB，默认白色 */
@@ -126,9 +140,22 @@ export interface TextOptions {
   align?: 'left' | 'center' | 'right';
   /** 设计单位；超过时按空格（中日韩字符逐字）换行 */
   maxWidth?: number;
+  /** 单行 GUI 度量：纵向原点为基线，使用字体的逻辑字号而非源像素尺寸。 */
+  origin?: 'guiBaseline';
 }
 
-/** 文字对象。原点：水平方向按 align（左边、中点、右边），垂直方向在整段文字的中线 */
+export interface GuiTextMetrics {
+  /** 以 GUI 像素计的笔尖前进量和绘制宽度。 */
+  advance: number;
+  width: number;
+  /** 字形越出笔尖左侧时为负，单位为 GUI 像素。 */
+  left: number;
+  /** 字形范围在基线以上、以下的 GUI 像素数。 */
+  above: number;
+  below: number;
+}
+
+/** 文字对象。默认纵向原点在整段文字中线；guiBaseline 模式用基线，左对齐以笔尖为横向原点。 */
 export interface TextObject {
   object: THREE.Object3D;
   /** 设计单位 */
@@ -152,11 +179,20 @@ export interface SpriteObject {
   setOpacity(opacity: number): void;
 }
 
+/** 已生效的阶段时长（秒），键与 manifest.timeline.segments 对应。 */
+export interface EffectiveTiming {
+  durations: Readonly<Record<string, number>>;
+  /** 当前阶段是否由对应的 duration 参数控制。 */
+  editable: boolean;
+}
+
 export interface TemplateInstance {
   /** 秒，0.1–30 */
   duration: number;
   /** 转场类必填 */
   cutTime?: number | null;
+  /** 参数与实际阶段不一定相等时，返回这次装载使用的时长。 */
+  timing?: EffectiveTiming;
   update(t: number): void;
   dispose?(): void;
 }

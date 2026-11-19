@@ -15,6 +15,7 @@ export const HostCommandIdSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9.-]*$/).
 export const HostCommandRequestSchema = z.strictObject({
   requestId: z.uuid(),
   command: HostCommandIdSchema,
+  source: z.literal('mac-menu').optional(),
   input: BoundedJson.optional(),
 });
 export type HostCommandRequest = z.infer<typeof HostCommandRequestSchema>;

@@ -2,17 +2,34 @@
 // 不依赖 DOM、React、Electron、Node，只用 Worker 里可用的 Web API。
 import * as THREE from 'three';
 import {
+  applyExecutionTracePlan,
+  CompositionLoadRequestSchema,
+  CompositionLoadResultSchema,
+  compositionSourceKey,
+  studioMaterialKind,
+  studioMaterialManifest,
+  EffectiveTimingSchema,
   FrameQualitySchema,
   LoadRequestSchema,
   OpaqueSchema,
   ParamValuesSchema,
   ResizeSchema,
+  ResourceNoticeCodeSchema,
   ThumbRequestSchema,
   EngineModeSchema,
+  ExecutionTraceConfigSchema,
+  originalTraceLocation,
   type AudioCue,
+  type EffectiveTiming,
+  type CompositionLoadRequest,
+  type CompositionLoadResult,
+  type EngineLoadRequest,
   type EngineMode,
+  type ExecutionTraceConfig,
+  type SetupTraceResult,
   type FrameQuality,
   type FrameStats,
+  type FontUsage,
   type LoadRequest,
   type LoadResult,
   type Opaque,
@@ -30,24 +47,28 @@ import {
   type TemplateDiagnostic,
 } from '@allay/template-sdk';
 import { pickSoundVariant } from '@allay/assets';
+import { compileTransform, framePosition, localFrame, placeCue, type Clip } from './composition-timing';
 import { createBlockHandle } from './blocks';
 import { describeThrown, diagnosticFromError } from './diagnostics';
 import { ease, math, segment } from './ease';
+import { ExecutionTraceRecorder, type BindTraceRecorder } from './execution-trace';
 import { frameTime, subframeTimes } from './frames';
 import { DeterminismGuard, DeterminismViolation } from './harden';
 import { createNoise2D, type Noise2D } from './noise';
 import { createItemHandle } from './items';
-import { FramePipeline } from './pipeline';
+import { FramePipeline, type CompositionRenderOptions } from './pipeline';
 import { createRng } from './random';
 import { EngineResources } from './resources';
 import { createSprite } from './sprite';
 import { computeStage, createDefaultCamera, createStageCamera } from './stage';
-import { createGlyphSource, createText } from './text';
+import { setupText } from './text';
 import { buildThumbScene } from './thumbnail';
+import objectMaterial from './studio/object';
+import playerMaterial from './studio/player';
 
 /** 宿主实现的回调，经 Comlink.proxy 传入（2.3） */
 export interface HostCallbacks {
-  resolveResource(kind: ResourceKind, id: string): Promise<ResourcePayload | null>;
+  resolveResource(kind: ResourceKind, id: string, source?: number): Promise<ResourcePayload | null>;
   log(level: 'debug' | 'warn' | 'error', message: string): void;
 }
 
@@ -62,10 +83,11 @@ export interface InitOptions {
 /** 引擎对外的接口（2.3） */
 export interface EngineApi {
   init(opts: InitOptions, host: HostCallbacks): Promise<void>;
-  load(req: LoadRequest): Promise<LoadResult>;
-  setParams(params: ParamValues): Promise<LoadResult>;
+  load(req: EngineLoadRequest, trace?: ExecutionTraceConfig): Promise<LoadResult | CompositionLoadResult>;
+  setParams(params: ParamValues, trace?: ExecutionTraceConfig): Promise<LoadResult>;
   resize(width: number, height: number): void;
   render(t: number, quality?: FrameQuality): Promise<FrameStats>;
+  configureExecutionTrace(config: ExecutionTraceConfig): Promise<SetupTraceResult>;
   renderFrame(index: number, quality: FrameQuality, opaque?: Opaque): Promise<ArrayBuffer>;
   /** 方块、物品的缩略图（03-assets.md 3.10）；杂务和导出引擎可用 */
   renderThumbnail(req: ThumbRequest): Promise<ImageBitmap>;
@@ -106,12 +128,19 @@ function contractError(kind: 'load' | 'setup', code: string, message: string): T
 
 const DEFAULT_QUALITY: FrameQuality = { subframes: 1, shutterAngle: 180 };
 const MAX_WARNINGS = 50;
+const studioMaterials = { object: objectMaterial, player: playerMaterial };
 
-interface Loaded {
+interface ImportedTemplate {
   module: TemplateModule;
   /** 装载时用的 Blob URL（已撤销），用来在调用栈里认出模板自己的栈帧 */
   moduleUrl: string;
+  bindTrace?: BindTraceRecorder;
+  tracePlan?: NonNullable<ExecutionTraceConfig>;
+}
+
+interface Loaded extends ImportedTemplate {
   code: string;
+  resourceStamp: string;
   manifest: TemplateManifest;
   locale: string;
   output: LoadRequest['output'];
@@ -120,7 +149,10 @@ interface Loaded {
 }
 
 interface Active {
+  moduleUrl: string;
+  trace?: { code: string; plan: NonNullable<ExecutionTraceConfig>; recorder: ExecutionTraceRecorder; setup: SetupTraceResult };
   instance: TemplateInstance;
+  takeFontUsage?: () => number;
   scene: THREE.Scene;
   /** 这次 setup 自己建的贴图（文字），实例销毁时释放 */
   owned: THREE.Texture[];
@@ -128,6 +160,37 @@ interface Active {
   camera(): THREE.Camera;
   duration: number;
   cutTime: number | null;
+}
+
+interface CompositionLayer {
+  clip: Clip;
+  active: Active;
+  resources: EngineResources;
+  moduleUrl: string;
+  transform: ReturnType<typeof compileTransform>;
+  source: CompositionLoadRequest['sources'][number];
+  sourceSlot: { index: number };
+  result: LoadResult;
+  params: ParamValues;
+}
+
+interface ActiveComposition {
+  duration: number;
+  totalFrames: number;
+  output: LoadRequest['output'];
+  stage: StageInfo;
+  locale: string;
+  layers: CompositionLayer[];
+}
+
+interface TraceVariant {
+  base: Active;
+  active: Active;
+  resources: EngineResources;
+}
+
+function matchesTrace(config: ExecutionTraceConfig, template: { id: string; version: string }, clipId?: string): config is NonNullable<ExecutionTraceConfig> {
+  return !!config && config.target.id === template.id && config.target.version === template.version && config.target.clipId === clipId;
 }
 
 /** sRGB 编码的 #RRGGBB → 线性 RGB */
@@ -140,7 +203,7 @@ function hexToLinear(hex: string): [number, number, number] {
  * 把模板源码当作 ESM 装载（2.4）：Blob URL + 动态 import。
  * 语法错误在宿主交来之前已经用解析器预检过（带位置）；动态 import 报的 SyntaxError 拿不到可用位置，不带。
  */
-async function importTemplate(code: string): Promise<{ module: TemplateModule; moduleUrl: string }> {
+async function importTemplate(code: string, traceBinding?: string): Promise<ImportedTemplate> {
   const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
   let mod: unknown;
   try {
@@ -158,7 +221,8 @@ async function importTemplate(code: string): Promise<{ module: TemplateModule; m
   if (!def || typeof (def as { setup?: unknown }).setup !== 'function') {
     throw contractError('load', 'bad-export', 'template must default-export an object with a setup(ctx) function');
   }
-  return { module: def as TemplateModule, moduleUrl: url };
+  const bind = traceBinding === undefined ? undefined : (mod as Record<string, unknown>)[traceBinding];
+  return { module: def as TemplateModule, moduleUrl: url, ...(typeof bind === 'function' ? { bindTrace: bind as BindTraceRecorder } : {}) };
 }
 
 function validateInstance(value: unknown): Active['instance'] {
@@ -203,6 +267,11 @@ export class Engine implements EngineApi {
 
   private loaded: Loaded | null = null;
   private active: Active | null = null;
+  private composition: ActiveComposition | null = null;
+  private traceVariant: TraceVariant | null = null;
+  private readonly stagedTraces = new WeakMap<Active, TraceVariant>();
+  private loading = false;
+  private lifetime = 0;
   private resources: EngineResources | null = null;
   private readonly times: number[] = [];
   /** setup 期间预编译着色器时，编译失败记到这次装载的警告里 */
@@ -259,26 +328,151 @@ export class Engine implements EngineApi {
     this.pipeline = new FramePipeline(renderer, Math.max(1, canvas.width), Math.max(1, canvas.height), this.mode !== 'preview');
   }
 
-  async load(req: LoadRequest): Promise<LoadResult> {
-    const parsed = LoadRequestSchema.parse(req);
+  async load(req: EngineLoadRequest, trace?: ExecutionTraceConfig): Promise<LoadResult | CompositionLoadResult> {
     this.requireInit();
+    const config = trace !== undefined && this.mode === 'preview' ? ExecutionTraceConfigSchema.parse(trace) : null;
+    return this.duringLoad(async (assertCurrent) => {
+      this.disposeTraceVariant();
+      if (req === null) {
+        this.disposeComposition();
+        this.disposeActive();
+        this.loaded = null;
+        this.resources!.dispose();
+        this.renderer!.setRenderTarget(null);
+        this.renderer!.setClearColor(0, 0);
+        this.renderer!.clear(true, true, false);
+        return { duration: 0, cutTime: null, audioCues: [], warnings: [], totalFrames: 0 };
+      }
+      if ('composition' in req) return this.loadComposition(CompositionLoadRequestSchema.parse(req), assertCurrent, config);
+      return this.loadSingle(LoadRequestSchema.parse(req), assertCurrent, config);
+    });
+  }
+
+  private async duringLoad<T>(load: (assertCurrent: () => void) => Promise<T>): Promise<T> {
+    if (this.loading) throw new Error('engine load already in progress');
+    this.loading = true;
+    const lifetime = this.lifetime;
+    try {
+      return await load(() => {
+        if (lifetime !== this.lifetime) throw new Error('engine disposed during load');
+      });
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async loadSingle(parsed: LoadRequest, assertCurrent: () => void, config: ExecutionTraceConfig): Promise<LoadResult> {
+    this.disposeComposition();
     this.resources!.setStamp(parsed.resourceStamp);
-    const { module, moduleUrl } =
-      this.loaded && this.loaded.code === parsed.code ? { module: this.loaded.module, moduleUrl: this.loaded.moduleUrl } : await importTemplate(parsed.code);
-    const stage = computeStage(parsed.output);
+    const trace = matchesTrace(config, parsed.manifest) ? config : null;
+    const previous = this.loaded;
+    const imported = !trace && previous && !previous.tracePlan && previous.code === parsed.code ? previous : await this.importForSetup(parsed.code, trace);
+    assertCurrent();
+    const stage = computeStage(parsed.output, parsed.referenceSize);
     const locale = parsed.locale ?? 'en';
     // 参数经 template-sdk 的校验函数清洗（4.4）：缺的补默认值，多的丢弃，类型不对的回到默认值，越界的钳制
     const params = cleanParams(parsed.manifest, parsed.params, locale);
-    this.loaded = { module, moduleUrl, code: parsed.code, manifest: parsed.manifest, locale, output: parsed.output, stage, params };
+    this.loaded = { ...imported, code: parsed.code, resourceStamp: parsed.resourceStamp, manifest: parsed.manifest, locale, output: parsed.output, stage, params };
     if (this.mode !== 'preview') this.pipeline!.setSize(parsed.output.width, parsed.output.height);
     return this.setup();
   }
 
-  async setParams(params: ParamValues): Promise<LoadResult> {
+  private async loadComposition(req: CompositionLoadRequest, assertCurrent: () => void, config: ExecutionTraceConfig): Promise<CompositionLoadResult> {
+    const { composition, output } = req;
+    const stage = computeStage(output);
+    const totalFrames = composition.durationFrames;
+    const duration = totalFrames / output.fps;
+    const sourceIndexes = new Map(req.sources.map((source, index) => [compositionSourceKey(source.template, source.profile), index]));
+    if (sourceIndexes.size !== req.sources.length) throw new Error('duplicate composition source');
+    const layers: CompositionLayer[] = [];
+    const staged: CompositionLayer[] = [];
+    const previous = this.composition;
+    const audioCues: AudioCue[] = [];
+    const warnings: string[] = [];
+    const locale = req.locale ?? 'en';
+    const reuse = previous && previous.locale === locale && previous.output.width === output.width &&
+      previous.output.height === output.height && previous.output.fps === output.fps;
+    const previousById = new Map(reuse ? previous.layers.map((layer) => [layer.clip.id, layer]) : []);
+    const host = this.host!;
+    let result: CompositionLoadResult;
+    try {
+      for (const track of composition.tracks) {
+        if (track.muted) continue;
+        for (const clip of track.clips) {
+          if (clip.startFrame >= totalFrames) continue;
+          const profile = clip.profile ?? composition.defaultProfile;
+          const index = sourceIndexes.get(compositionSourceKey(clip.template, profile));
+          if (index === undefined) throw new Error(`missing composition source: ${clip.template.id}@${clip.template.version}`);
+          const source = req.sources[index]!;
+          const script = 'code' in source ? source : undefined;
+          const native = studioMaterialKind(source.template);
+          const manifest = script?.manifest ?? studioMaterialManifest(source.template)!;
+          const code = script?.code ?? '';
+          const params = cleanParams(manifest, clip.params, locale);
+          const old = previousById.get(clip.id);
+          const transform = compileTransform(clip);
+          let layer: CompositionLayer;
+          const oldScript = old && 'code' in old.source ? old.source : undefined;
+          if (old && old.source.resourceStamp === source.resourceStamp && oldScript?.code === script?.code &&
+              compositionSourceKey(old.source.template, old.source.profile) === compositionSourceKey(source.template, profile) &&
+              JSON.stringify(oldScript?.manifest) === JSON.stringify(script?.manifest) && JSON.stringify(old.params) === JSON.stringify(params)) {
+            layer = { ...old, clip, transform };
+          } else {
+            const imported = native ? { module: studioMaterials[native], moduleUrl: '' }
+              : await this.importForSetup(code, matchesTrace(config, source.template, clip.id) ? config : null);
+            assertCurrent();
+            const sourceSlot = { index };
+            const resources = new EngineResources((kind, id) => host.resolveResource(kind, id, sourceSlot.index), (level, message) => host.log(level, message));
+            try {
+              const { active, result } = await this.setupInstance({ ...imported, code, manifest, resourceStamp: source.resourceStamp, locale, output, stage, params }, resources, true);
+              layer = { clip, active, resources, moduleUrl: imported.moduleUrl, transform, source, sourceSlot, result, params };
+            } catch (error) {
+              resources.dispose();
+              throw error;
+            }
+            staged.push(layer);
+            assertCurrent();
+          }
+          layers.push(layer);
+          for (const cue of layer.result.audioCues) {
+            const placed = placeCue(cue, clip, output.fps, totalFrames, profile);
+            if (placed) audioCues.push(placed);
+          }
+          warnings.push(...layer.result.warnings.slice(0, MAX_WARNINGS - warnings.length));
+        }
+      }
+      audioCues.sort((left, right) => left.at - right.at);
+      const clipTiming = layers.flatMap(({ clip, result }) => result.timing ? [{ id: clip.id, timing: result.timing }] : []);
+      const clipResourceNotices = layers.flatMap(({ clip, result }) => result.resourceNotices?.length ? [{ id: clip.id, notices: result.resourceNotices }] : []);
+      result = CompositionLoadResultSchema.parse({ duration, cutTime: null, audioCues, warnings, totalFrames,
+        ...(clipTiming.length ? { clipTiming } : {}), ...(clipResourceNotices.length ? { clipResourceNotices } : {}) });
+      if (this.mode !== 'preview') this.pipeline!.setSize(output.width, output.height);
+    } catch (error) {
+      this.disposeLayers(staged);
+      throw error;
+    }
+    this.disposeActive();
+    const retained = new Set(layers.map((layer) => layer.active));
+    this.disposeLayers(previous?.layers.filter((layer) => !retained.has(layer.active)) ?? []);
+    for (const layer of layers) layer.sourceSlot.index = sourceIndexes.get(compositionSourceKey(layer.source.template, layer.source.profile))!;
+    this.loaded = null;
+    this.composition = { duration, totalFrames, output, stage, layers, locale };
+    return result;
+  }
+
+  async setParams(params: ParamValues, trace?: ExecutionTraceConfig): Promise<LoadResult> {
     const parsed = ParamValuesSchema.parse(params);
     if (!this.loaded) throw new Error('no template loaded');
-    this.loaded = { ...this.loaded, params: cleanParams(this.loaded.manifest, parsed, this.loaded.locale) };
-    return this.setup();
+    return this.duringLoad(async (assertCurrent) => {
+      this.disposeTraceVariant();
+      const { module, moduleUrl, tracePlan, ...loaded } = this.loaded!;
+      const config = trace !== undefined && this.mode === 'preview' ? ExecutionTraceConfigSchema.parse(trace) : null;
+      const selected = matchesTrace(config, loaded.manifest) ? config : null;
+      const imported = !tracePlan && !selected ? { module, moduleUrl } : await this.importForSetup(loaded.code, selected);
+      assertCurrent();
+      this.loaded = { ...loaded, ...imported, params: cleanParams(loaded.manifest, parsed, loaded.locale) };
+      return this.setup();
+    });
   }
 
   resize(width: number, height: number): void {
@@ -292,15 +486,29 @@ export class Engine implements EngineApi {
     const q = FrameQualitySchema.parse(quality);
     if (this.mode !== 'preview') throw new Error('render() is only for the preview engine');
     const start = performance.now();
-    const active = this.active;
-    if (!active) {
+    const variant = this.traceVariant;
+    variant?.active.trace?.recorder.begin();
+    let fontUsage: FontUsage[] | undefined;
+    let tc = t;
+    if (this.composition) {
+      tc = Math.min(this.composition.duration, Math.max(0, Number.isFinite(t) ? t : 0));
+      const byClip = new Map<string, number>();
+      this.pipeline!.renderToCanvas(this.compositionOptions(this.composition, tc, q, variant, byClip));
+      if (byClip.size) fontUsage = Array.from(byClip, ([clipId, flags]) => ({ clipId, flags }));
+    } else if (this.active) {
+      tc = Math.min(this.active.duration, Math.max(0, Number.isFinite(t) ? t : 0));
+      const active = variant?.active ?? this.active;
+      active.takeFontUsage?.();
+      this.pipeline!.renderToCanvas(this.passOptions(this.active, tc, q, variant));
+      const flags = active.takeFontUsage?.();
+      if (flags) fontUsage = [{ flags }];
+    } else {
       this.renderer!.setRenderTarget(null);
+      this.renderer!.setClearColor(0, 0);
       this.renderer!.clear(true, true, false);
-      return { t, ms: performance.now() - start };
     }
-    const tc = Math.min(active.duration, Math.max(0, Number.isFinite(t) ? t : 0));
-    this.pipeline!.renderToCanvas(this.passOptions(active, tc, q));
-    return { t: tc, ms: performance.now() - start };
+    const trace = variant?.active.trace?.recorder.finish();
+    return { t: tc, ms: performance.now() - start, ...(trace ? { trace } : {}), ...(fontUsage ? { fontUsage } : {}) };
   }
 
   async renderFrame(index: number, quality: FrameQuality, opaque?: Opaque): Promise<ArrayBuffer> {
@@ -308,9 +516,7 @@ export class Engine implements EngineApi {
     const o = opaque === undefined ? undefined : OpaqueSchema.parse(opaque);
     if (!Number.isInteger(index) || index < 0) throw new Error('frame index must be a non-negative integer');
     if (this.mode === 'preview') throw new Error('renderFrame() is for export and utility engines');
-    const active = this.requireActive();
-    const t = frameTime(index, this.loaded!.output.fps, active.duration);
-    const pixels = this.pipeline!.renderToPixels(this.passOptions(active, t, q), o ? 'opaque' : 'straight', o ? hexToLinear(o.key) : [0, 0, 0]);
+    const pixels = this.pipeline!.renderToPixels(this.optionsForFrame(index, q), o ? 'opaque' : 'straight', o ? hexToLinear(o.key) : [0, 0, 0]);
     return pixels.buffer;
   }
 
@@ -333,9 +539,9 @@ export class Engine implements EngineApi {
     const q = FrameQualitySchema.parse(quality);
     if (others.length > 64 || [probe, ...others].some((i) => !Number.isInteger(i) || i < 0)) throw new Error('frame indices must be non-negative integers (at most 64 others)');
     if (this.mode === 'preview') throw new Error('checkDeterminism() is for export and utility engines');
-    const active = this.requireActive();
-    const fps = this.loaded!.output.fps;
-    const render = (index: number) => this.pipeline!.renderToPixels(this.passOptions(active, frameTime(index, fps, active.duration), q), 'straight', [0, 0, 0]);
+    const timeline = this.composition ?? this.requireActive();
+    const fps = (this.composition?.output ?? this.loaded!.output).fps;
+    const render = (index: number) => this.pipeline!.renderToPixels(this.optionsForFrame(index, q), 'straight', [0, 0, 0]);
     // 第一次的结果复制出来：读回缓冲可能被后面的渲染复用
     const first = new Uint8Array(render(probe));
     for (const i of others) render(i);
@@ -343,7 +549,7 @@ export class Engine implements EngineApi {
     let differing = first.length === second.length ? 0 : Math.max(first.length, second.length);
     for (let k = 0; k < Math.min(first.length, second.length); k++) if (first[k] !== second[k]) differing++;
     if (differing === 0) return null;
-    const t = frameTime(probe, fps, active.duration);
+    const t = frameTime(probe, fps, timeline.duration);
     return {
       kind: 'determinism',
       severity: 'warning',
@@ -368,11 +574,15 @@ export class Engine implements EngineApi {
     } finally {
       disposeScene(scene);
       // 导出引擎上的模板仍按原来的输出尺寸渲染
-      if (this.loaded) this.pipeline!.setSize(this.loaded.output.width, this.loaded.output.height);
+      const output = this.composition?.output ?? this.loaded?.output;
+      if (output) this.pipeline!.setSize(output.width, output.height);
     }
   }
 
   dispose(): void {
+    this.lifetime++;
+    this.disposeTraceVariant();
+    this.disposeComposition();
     this.disposeActive();
     this.resources?.dispose();
     this.pipeline?.dispose();
@@ -384,34 +594,164 @@ export class Engine implements EngineApi {
 
   // ---- 内部 ----
 
-  private passOptions(active: Active, t: number, q: FrameQuality) {
-    const fps = this.loaded!.output.fps;
+  private optionsForFrame(index: number, quality: FrameQuality) {
+    const composition = this.composition;
+    if (composition) {
+      if (index >= composition.totalFrames) throw new RangeError('frame index outside composition');
+      return this.compositionOptions(composition, index / composition.output.fps, quality);
+    }
+    const active = this.requireActive();
+    return this.passOptions(active, frameTime(index, this.loaded!.output.fps, active.duration), quality);
+  }
+
+  private compositionOptions(composition: ActiveComposition, time: number, quality: FrameQuality, traced: TraceVariant | null = null, fontUsage?: Map<string, number>): CompositionRenderOptions {
+    const { output: { fps }, stage, layers, duration } = composition;
     return {
-      scene: active.scene,
-      camera: active.camera(),
-      times: subframeTimes(t, q.subframes, q.shutterAngle, fps, active.duration, this.times),
-      update: (tk: number) => {
-        // 动画贴图的帧是 t 的函数，每个子帧更新（2.8）
-        this.resources!.applyAnimations(tk);
-        try {
-          this.guard.run(() => active.instance.update(tk));
-        } catch (error) {
-          // 只在出错时分配：正常路径的零分配预算不变
-          throw this.updateFailure(error, tk);
+      stage,
+      times: subframeTimes(time, quality.subframes, quality.shutterAngle, fps, duration, this.times),
+      layersAt: (seconds, draw) => {
+        const frame = framePosition(seconds, fps);
+        if (frame >= composition.totalFrames) return;
+        for (const layer of layers) {
+          const local = localFrame(layer.clip, frame);
+          if (local === null) continue;
+          const transform = layer.transform(local);
+          if (transform.opacity <= 0 || transform.scale <= 0) continue;
+          const sourceTime = Math.min(layer.active.duration, (layer.clip.sourceInFrame + local) / fps);
+          const variant = traced?.base === layer.active ? traced : null;
+          const active = variant?.active ?? layer.active;
+          if (variant) this.updateTraced(variant, sourceTime);
+          else this.update(active, layer.resources, layer.moduleUrl, sourceTime);
+          if (fontUsage) active.takeFontUsage?.();
+          draw({ scene: active.scene, camera: active.camera(), transform });
+          if (fontUsage) {
+            const flags = active.takeFontUsage?.();
+            if (flags) fontUsage.set(layer.clip.id, (fontUsage.get(layer.clip.id) ?? 0) | flags);
+          }
         }
       },
     };
   }
 
+  private passOptions(active: Active, t: number, q: FrameQuality, traced: TraceVariant | null = null) {
+    const fps = this.loaded!.output.fps;
+    if (traced) return {
+      scene: traced.active.scene,
+      camera: traced.active.camera(),
+      times: subframeTimes(t, q.subframes, q.shutterAngle, fps, active.duration, this.times),
+      update: (tk: number) => this.updateTraced(traced, tk),
+    };
+    return {
+      scene: active.scene,
+      camera: active.camera(),
+      times: subframeTimes(t, q.subframes, q.shutterAngle, fps, active.duration, this.times),
+      update: (tk: number) => this.update(active, this.resources!, this.loaded!.moduleUrl, tk),
+    };
+  }
+
+  async configureExecutionTrace(raw: ExecutionTraceConfig): Promise<SetupTraceResult> {
+    if (this.mode !== 'preview') throw new Error('trace is only for the preview engine');
+    const config = ExecutionTraceConfigSchema.parse(raw);
+    return this.duringLoad(async (assertCurrent) => {
+      this.traceVariant = null;
+      return config ? this.stageTraceVariant(config, assertCurrent) : null;
+    });
+  }
+
+  private async importForSetup(code: string, trace: ExecutionTraceConfig): Promise<ImportedTemplate> {
+    if (trace) {
+      try {
+        const imported = await importTemplate(applyExecutionTracePlan(code, trace), `${trace.stem}Bind`);
+        if (imported.bindTrace) return { ...imported, tracePlan: trace };
+      } catch {
+        // 插桩不可用时照常装载原始模板。
+      }
+    }
+    return importTemplate(code);
+  }
+
+  private async stageTraceVariant(config: NonNullable<ExecutionTraceConfig>, assertCurrent: () => void): Promise<SetupTraceResult> {
+    const { target } = config;
+    let base: Active;
+    let baseResources: EngineResources;
+    let seed: Omit<Loaded, keyof ImportedTemplate>;
+    let resolve: HostCallbacks['resolveResource'];
+    const host = this.host!;
+    if (this.composition) {
+      const clip = this.composition.layers.find((layer) => matchesTrace(config, layer.source.template, layer.clip.id));
+      if (!clip || !('code' in clip.source)) return null;
+      base = clip.active;
+      baseResources = clip.resources;
+      const { code, manifest, resourceStamp } = clip.source;
+      const { output, stage, locale } = this.composition;
+      seed = { code, manifest, resourceStamp, output, stage, locale, params: clip.params };
+      resolve = (kind, id) => host.resolveResource(kind, id, clip.sourceSlot.index);
+    } else {
+      if (target.clipId !== undefined || !this.active || !this.loaded || !matchesTrace(config, this.loaded.manifest)) return null;
+      base = this.active;
+      baseResources = this.resources!;
+      seed = this.loaded;
+      resolve = (kind, id) => host.resolveResource(kind, id);
+    }
+    if (base.trace) {
+      this.traceVariant = { base, active: base, resources: baseResources };
+      return base.trace.setup;
+    }
+    const cached = this.stagedTraces.get(base);
+    if (cached) {
+      this.traceVariant = cached;
+      return cached.active.trace?.setup ?? null;
+    }
+    const resources = new EngineResources(resolve, (level, message) => host.log(level, message));
+    let active: Active | undefined;
+    try {
+      const imported = await importTemplate(applyExecutionTracePlan(seed.code, config), `${config.stem}Bind`);
+      assertCurrent();
+      if (!imported.bindTrace) return null;
+      const loaded = { ...seed, ...imported, tracePlan: config };
+      resources.setStamp(seed.resourceStamp);
+      ({ active } = await this.setupInstance(loaded, resources, this.composition !== null));
+      assertCurrent();
+      if (active.duration !== base.duration || active.cutTime !== base.cutTime) return null;
+      this.traceVariant = { base, active, resources };
+      this.stagedTraces.set(base, this.traceVariant);
+      return active.trace?.setup ?? null;
+    } catch {
+      return null;
+    } finally {
+      if (this.traceVariant?.resources !== resources) {
+        if (active) this.disposeInstance(active);
+        resources.dispose();
+      }
+    }
+  }
+
+  private updateTraced(variant: TraceVariant, t: number): void {
+    const { active, resources } = variant;
+    this.update(active, resources, active.moduleUrl, t, active.trace?.recorder);
+  }
+
+  private disposeTraceVariant(): void {
+    this.traceVariant = null;
+  }
+
   /** update(t) 抛出的东西 → 带诊断的 TemplateError */
-  private updateFailure(error: unknown, t: number): TemplateError {
-    if (error instanceof TemplateError) return error;
-    const url = this.loaded?.moduleUrl ?? null;
-    const diagnostic =
-      error instanceof DeterminismViolation
+  private update(active: Active, resources: EngineResources, url: string, t: number, recorder?: ExecutionTraceRecorder): void {
+    resources.applyAnimations(t);
+    try {
+      if (recorder) this.guard.run(() => recorder.run(() => active.instance.update(t)));
+      else this.guard.run(() => active.instance.update(t));
+    } catch (error) {
+      if (error instanceof TemplateError && !active.trace) throw error;
+      const diagnostic = error instanceof TemplateError ? error.diagnostic : error instanceof DeterminismViolation
         ? diagnosticFromError('determinism', 'forbidden-api', error, url, { t })
         : diagnosticFromError('update', 'update-threw', error, url, { t });
-    return templateError(`template update(${t}) failed`, diagnostic, error);
+      if (active.trace && diagnostic.line !== undefined && diagnostic.column !== undefined) {
+        Object.assign(diagnostic, originalTraceLocation(active.trace.code, active.trace.plan, { line: diagnostic.line, column: diagnostic.column }));
+      }
+      if (error instanceof TemplateError) throw error;
+      throw templateError(`template update(${t}) failed`, diagnostic, error);
+    }
   }
 
   private requireInit(): void {
@@ -426,7 +766,30 @@ export class Engine implements EngineApi {
   private disposeActive(): void {
     const active = this.active;
     this.active = null;
-    if (!active) return;
+    if (active) this.disposeInstance(active);
+  }
+
+  private disposeLayers(layers: readonly CompositionLayer[]): void {
+    for (const { active, resources } of layers) {
+      this.disposeInstance(active);
+      resources.dispose();
+    }
+  }
+
+  private disposeComposition(): void {
+    if (!this.composition) return;
+    this.disposeLayers(this.composition.layers);
+    this.composition = null;
+    this.pipeline?.clearComposition();
+  }
+
+  private disposeInstance(active: Active): void {
+    const staged = this.stagedTraces.get(active);
+    if (staged) {
+      this.stagedTraces.delete(active);
+      this.disposeInstance(staged.active);
+      staged.resources.dispose();
+    }
     try {
       active.instance.dispose?.();
     } catch (error) {
@@ -437,20 +800,40 @@ export class Engine implements EngineApi {
   }
 
   private async setup(): Promise<LoadResult> {
-    this.requireInit();
     const loaded = this.loaded!;
     this.disposeActive();
+    const lifetime = this.lifetime;
+    const { active, result } = await this.setupInstance(loaded, this.resources!);
+    if (lifetime !== this.lifetime) {
+      this.disposeInstance(active);
+      throw new Error('engine disposed during setup');
+    }
+    this.active = active;
+    return result;
+  }
 
+  private async setupInstance(loaded: Loaded, resources: EngineResources, setupOnly = false): Promise<{ active: Active; result: LoadResult }> {
     const warnings: string[] = [];
-    const warn = (message: string) => {
+    const warn = (message: string, code?: 'catalog-placeholder') => {
       if (warnings.length < MAX_WARNINGS) warnings.push(String(message).slice(0, 500));
+      if (code) resourceNotices.add(code);
     };
     const cues: AudioCue[] = [];
+    const resourceNotices = new Set<NonNullable<LoadResult['resourceNotices']>[number]>();
     let setupDone = false;
-    const resources = this.resources!;
+    const setupResource = <T,>(load: () => Promise<T>): Promise<T> => {
+      if (setupOnly && setupDone) throw new Error('composition resources may only be loaded during setup');
+      return load();
+    };
     const owned: THREE.Texture[] = [];
     // text.create 是同步的，字体要在 setup 之前载好
-    const glyphs = createGlyphSource(await resources.fonts());
+    const fontIds = (loaded.manifest.params ?? []).flatMap((def) => {
+      const value = loaded.params[def.key];
+      return def.type === 'font' && typeof value === 'string' ? [value] : [];
+    });
+    let fontUsage = 0;
+    const report = this.mode === 'preview' ? (flags: number) => { fontUsage |= flags; } : undefined;
+    const text = await setupText(fontIds, (id) => resources.fonts(id), warn, owned, () => !setupDone, report);
 
     const scene = new THREE.Scene();
     let camera: THREE.Camera = createDefaultCamera(loaded.stage);
@@ -461,6 +844,7 @@ export class Engine implements EngineApi {
 
     const ctx: SetupContext = {
       THREE,
+      locale: loaded.locale,
       params: Object.freeze({ ...loaded.params }),
       stage: Object.freeze({ ...loaded.stage }),
       scene,
@@ -473,11 +857,12 @@ export class Engine implements EngineApi {
       },
       createStageCamera: (opts) => createStageCamera(loaded.stage, opts.fov),
       resources: {
-        texture: (id) => resources.texture(id, warn),
-        block: (id, opts) => createBlockHandle(resources, id, opts, warn),
-        item: (id) => createItemHandle(resources, id, warn),
+        texture: (id) => setupResource(() => resources.texture(id, warn)),
+        optionalTexture: (id) => setupResource(() => resources.optionalTexture(id)),
+        block: (id, opts) => setupResource(() => createBlockHandle(resources, id, opts, warn)),
+        item: (id) => setupResource(() => createItemHandle(resources, id, warn)),
       },
-      text: { create: (opts) => createText(opts, glyphs, warn, owned) },
+      text,
       sprite: { create: (texture, opts) => createSprite(texture, opts) },
       random: (key = '') => createRng(seed, String(key)),
       noise2D: (x, y, key = '') => {
@@ -501,25 +886,65 @@ export class Engine implements EngineApi {
           }
           if (sound === null) return;
           if (typeof sound !== 'string' || typeof at !== 'number' || !Number.isFinite(at)) throw new TypeError('invalid audio cue');
-          cues.push({ sound, at, gain: opts.gain ?? 1, rate: opts.rate ?? 1, pan: opts.pan ?? 0, variant: null });
+          let spatial: AudioCue['spatial'];
+          if (opts.position) {
+            const [x, y, z] = opts.position;
+            if (![x, y, z].every(Number.isFinite)) throw new TypeError('invalid audio cue position');
+            const world = new THREE.Vector3(x, y, z);
+            camera.updateWorldMatrix(true, false);
+            const local = camera.worldToLocal(world.clone());
+            const screen = world.project(camera);
+            const reference = loaded.stage.width / 2;
+            const distance = Math.hypot(local.x, local.y, local.z) / reference;
+            const center = camera.worldToLocal(new THREE.Vector3()).length() / reference;
+            const excess = Math.max(0, distance - center);
+            spatial = { pan: Math.max(-1, Math.min(1, Number.isFinite(screen.x) ? screen.x : 0)), gain: 1 / (1 + 2 * excess) };
+          }
+          cues.push({ sound, at, gain: opts.gain ?? 1, rate: opts.rate ?? 1, pan: opts.pan ?? 0, variant: null, ...(spatial ? { spatial } : {}) });
         },
       },
-      warn,
+      warn(message, code) {
+        warn(message);
+        if (!setupDone && code === 'panorama-fallback') {
+          const parsed = ResourceNoticeCodeSchema.safeParse(code);
+          if (parsed.success) resourceNotices.add(parsed.data);
+        }
+      },
     };
 
     let instance: TemplateInstance;
+    let timing: EffectiveTiming | undefined;
+    const plan = loaded.tracePlan;
+    const recorder = plan && loaded.bindTrace ? new ExecutionTraceRecorder(loaded.bindTrace) : null;
     try {
-      instance = validateInstance(await loaded.module.setup(ctx));
+      instance = validateInstance(recorder ? await recorder.runSetup(() => loaded.module.setup(ctx)) : await loaded.module.setup(ctx));
+      const declared = instance.timing;
+      if (declared !== undefined) {
+        const parsed = EffectiveTimingSchema.safeParse(declared);
+        const segments = loaded.manifest.timeline?.segments ?? [];
+        if (!parsed.success || segments.length !== Object.keys(parsed.data.durations).length ||
+            segments.some(({ param }) => !Object.hasOwn(parsed.data.durations, param)) ||
+            Math.abs(Object.values(parsed.data.durations).reduce((sum, duration) => sum + duration, 0) - instance.duration) >= 1e-6) {
+          throw contractError('setup', 'bad-instance', 'instance.timing must match manifest timeline segments and sum to instance.duration');
+        }
+        timing = parsed.data;
+      }
     } catch (error) {
       disposeScene(scene);
       for (const t of owned) t.dispose();
       if (error instanceof TemplateError) throw error;
-      throw templateError('template setup() failed', diagnosticFromError('setup', 'setup-threw', error, loaded.moduleUrl), error);
+      const diagnostic = diagnosticFromError('setup', 'setup-threw', error, loaded.moduleUrl);
+      if (plan && diagnostic.line !== undefined && diagnostic.column !== undefined) {
+        Object.assign(diagnostic, originalTraceLocation(loaded.code, plan, { line: diagnostic.line, column: diagnostic.column }));
+      }
+      throw templateError('template setup() failed', diagnostic, error);
     } finally {
       setupDone = true;
     }
     const cutTime = instance.cutTime ?? null;
-    this.active = { instance, scene, owned, camera: () => camera, duration: instance.duration, cutTime };
+    const active: Active = { instance, scene, owned, moduleUrl: loaded.moduleUrl, camera: () => camera, duration: instance.duration, cutTime,
+      ...(report && { takeFontUsage: () => { const flags = fontUsage; fontUsage = 0; return flags; } }),
+      ...(recorder && plan ? { trace: { code: loaded.code, recorder, plan, setup: recorder.finish() ?? null } } : {}) };
     // 预编译着色器：编译失败在这次装载的警告里出现，而不是只在控制台
     this.shaderWarn = warn;
     try {
@@ -529,16 +954,21 @@ export class Engine implements EngineApi {
     } finally {
       this.shaderWarn = null;
     }
-    const audioCues = await this.pickVariants(cues, seed);
-    return { duration: instance.duration, cutTime, audioCues, warnings };
+    try {
+      const audioCues = await this.pickVariants(cues, seed, resources);
+      return { active, result: { duration: instance.duration, cutTime, audioCues, warnings,
+        ...(timing ? { timing } : {}), ...(resourceNotices.size ? { resourceNotices: [...resourceNotices] } : {}) } };
+    } catch (error) {
+      this.disposeInstance(active);
+      throw error;
+    }
   }
 
   /**
    * 给每个 cue 选定音效变体（02-engine.md 2.10）：同一事件的第 n 个 cue 用 random('sound:' + 事件 + ':' + n)，
    * 和模板的 ctx.random 是同一个生成器，所以预览和导出（以及两次装载）选到同一个。资源栈里没有这个事件时 variant 为 null。
    */
-  private async pickVariants(cues: readonly AudioCue[], seed: number): Promise<AudioCue[]> {
-    const resources = this.resources!;
+  private async pickVariants(cues: readonly AudioCue[], seed: number, resources: EngineResources): Promise<AudioCue[]> {
     const ordinal = new Map<string, number>();
     const out: AudioCue[] = [];
     for (const cue of cues) {
@@ -546,7 +976,7 @@ export class Engine implements EngineApi {
       ordinal.set(cue.sound, n + 1);
       const variants = await resources.soundVariants(cue.sound);
       const picked = pickSoundVariant(variants, createRng(seed, `sound:${cue.sound}:${n}`).next());
-      out.push({ ...cue, variant: picked ? { file: picked.file, volume: picked.volume, pitch: picked.pitch } : null });
+      out.push({ ...cue, variant: picked ? { file: picked.file, volume: picked.volume, pitch: picked.pitch, ...(picked.kind ? { kind: picked.kind } : {}) } : null });
     }
     return out;
   }

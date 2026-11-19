@@ -1,14 +1,15 @@
 import { Button } from '@allay/ui/components/button';
 import { useTranslation } from 'react-i18next';
 import { useResourceStore } from '../../stores/resourceStore';
-import { addPack } from './actions';
-import { VanillaSourceActions } from './VanillaSourceActions';
+import { addPack, openAssetSettings, selectInstalledVersion } from './actions';
+import { resourceLabels } from './resourceLabels';
 
 // 没有任何素材层（原版层、资源包都没有）时，预览区上方的引导状态（decisions.md M2b）。
 // 不是错误：模板照常装载，缺的贴图显示为占位。
 
 export function ResourceOnboarding() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const vanilla = useResourceStore((s) => s.state?.vanilla);
   return (
     <div
       role="region"
@@ -20,12 +21,16 @@ export function ResourceOnboarding() {
         {t('resources.onboarding.title')}
       </h2>
       <p className="text-sm text-fg-muted">{t('resources.onboarding.body', { name: t('brand.name') })}</p>
-      <VanillaSourceActions />
-      <div className="flex flex-col gap-2 border-t border-divider pt-3">
-        <Button variant="secondary" className="self-start" data-testid="onboarding-add-pack" onClick={() => void addPack(t, 'zip')}>
+      <div className="flex flex-wrap gap-2">
+        {vanilla?.local && vanilla.consent !== true && <Button variant="secondary" data-testid="vanilla-use-local" onClick={() => void selectInstalledVersion()}>
+          {t('resources.useLocal', { version: vanilla.local.versionId })}
+        </Button>}
+        <Button variant="secondary" data-testid="onboarding-add-pack" onClick={() => void addPack(t, 'zip')}>
           {t('resources.addPack')}
         </Button>
-        <p className="text-xs text-fg-muted">{t('resources.dropHint')}</p>
+        <Button variant="ghost" data-testid="onboarding-manage-assets" onClick={openAssetSettings}>
+          {resourceLabels(i18n.language).manage}
+        </Button>
       </div>
     </div>
   );

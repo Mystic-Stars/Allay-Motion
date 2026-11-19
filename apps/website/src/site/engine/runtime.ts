@@ -38,8 +38,8 @@ export function templateEntries(): TemplateEntry[] {
   return builtinEntries();
 }
 
-export function templateSource(entry: TemplateEntry): TemplateSource | null {
-  const bundle = builtinBundle(entry.id, entry.version);
+export async function templateSource(entry: TemplateEntry): Promise<TemplateSource | null> {
+  const bundle = await builtinBundle(entry.id, entry.version);
   return bundle ? sourceFromBundle(bundle) : null;
 }
 
@@ -130,7 +130,7 @@ export class LivePreview {
     this.pendingParams = null;
     return this.queue(async () => {
       const host = this.host;
-      const source = templateSource(entry);
+      const source = await templateSource(entry);
       if (!host || !source || this.disposed) return;
       this.source = source;
       this.locale = locale;

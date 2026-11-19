@@ -1,11 +1,11 @@
 // 应用里的音频（docs/05-export.md 5.5、06-ui-design.md 6.4、6.5）：
-// - 音效库：按音效名经 IPC 从资源栈取文件（.ogg 优先，其次 .wav），资源栈一变就清空；
-// - 预览播放：跟着 transportStore 走。开始播放时调度所有 at ≥ t 的 cue；暂停、拖动、跳转、循环回到开头时
+// - 音效库：按音效名或库 ID 经 IPC 取文件，资源栈一变就清空；
+// - 预览播放：跟着 transportStore 走。音乐、空间音效及裁切过的 cue 可以从中途续播；暂停、拖动、跳转或循环时
 //   立刻停掉正在响的声音再重新调度，不叠音、不拖到下一轮；静音时不调度；
 // - 试听（SoundField 的按钮）；
 // - 缺失的音效：静音并给一条提示（不报错），同一组缺失在同一个资源栈下只提示一次。
 // 时间轴的时钟仍是界面的 rAF（TransportBar），声音按 AudioContext 的时钟排；两者偏离超过容差就重新调度。
-import { soundNameToPaths } from '@allay/assets';
+import { ImportedSoundIdSchema } from '@allay/assets';
 import type { AudioCue } from '@allay/template-sdk';
 import i18next from 'i18next';
 import { notify } from '../stores/noticeStore';
@@ -15,15 +15,10 @@ import { useTransportStore } from '../stores/transportStore';
 import { useUiStore } from '../stores/uiStore';
 import { scheduleCues } from './schedule';
 import { MIX_SAMPLE_RATE, SoundBank } from './sound-bank';
-import { soundFileStates } from './sound-library';
+import { soundFileStates, useSoundLibraryStore } from './sound-library';
 
-/** 按音效名从资源栈取文件：先 .ogg 再 .wav（3.8） */
-async function loadSoundFile(file: string): Promise<Uint8Array | null> {
-  for (const path of soundNameToPaths(file)) {
-    const bytes = await window.allay.resources.read(path);
-    if (bytes) return bytes;
-  }
-  return null;
+async function loadSoundFile(file: string, profile?: string): Promise<Uint8Array | null> {
+  return profile ? window.allay.sound.read(file, profile) : window.allay.sound.read(file);
 }
 
 const notifiedMissing = new Set<string>();
@@ -31,9 +26,10 @@ const notifiedMissing = new Set<string>();
 /** 应用共用的音效库（预览、试听、导出） */
 export const soundBank = new SoundBank(loadSoundFile);
 let bankStamp = currentStamp();
-useResourceStore.subscribe((s) => {
+useResourceStore.subscribe((s, previous) => {
   const stamp = s.state?.stamp ?? '';
-  if (stamp !== bankStamp) {
+  const profiles = (state: typeof s) => JSON.stringify(state.state?.library?.profiles.map(({ id, stamp }) => [id, stamp]));
+  if (stamp !== bankStamp || profiles(s) !== profiles(previous)) {
     bankStamp = stamp;
     soundBank.clear();
     notifiedMissing.clear();
@@ -41,6 +37,9 @@ useResourceStore.subscribe((s) => {
 });
 
 function soundName(id: string): string {
+  const names = useSoundLibraryStore.getState().events.find((item) => item.id === id)?.names;
+  const label = i18next.language.startsWith('zh') ? names?.['zh-CN'] : names?.en;
+  if (label) return label;
   return i18next.t(`editor.sound.names.${id.replace(/[:.]/g, '_')}`, { defaultValue: id });
 }
 
@@ -84,6 +83,7 @@ class PreviewAudio {
   /** 每次开始或停止加一：异步准备完时据此判断是否已经过时 */
   private token = 0;
   private audition: AudioBufferSourceNode | null = null;
+  private auditionToken = 0;
   private auditionTurn = new Map<string, number>();
   /** 测试钩子看的：最近一次试听 */
   lastAudition: { sound: string; file: string | null } | null = null;
@@ -95,7 +95,7 @@ class PreviewAudio {
     this.started = true;
     useTransportStore.subscribe((s, prev) => {
       if (s.playing !== prev.playing) {
-        if (s.playing) this.restart(s.time);
+        if (s.playing) this.restart();
         else this.stop();
       } else if (s.playing && s.time !== prev.time) {
         this.follow(s.time);
@@ -106,13 +106,13 @@ class PreviewAudio {
       // sound 参数变了：立刻反映到 cue（正在播放就按新的 cue 重新调度），并提前解码
       void soundBank.prepare(s.audioCues);
       const t = useTransportStore.getState();
-      if (t.playing) this.restart(t.time);
+      if (t.playing) this.restart();
     });
     useUiStore.subscribe((s, prev) => {
       if (s.settings.editor.muted === prev.settings.editor.muted) return;
       const t = useTransportStore.getState();
       if (s.settings.editor.muted) this.stop();
-      else if (t.playing) this.restart(t.time);
+      else if (t.playing) this.restart();
     });
   }
 
@@ -121,7 +121,7 @@ class PreviewAudio {
     const s = this.session;
     if (!s || !ctx) return;
     const expected = s.from + (ctx.currentTime - s.startAt);
-    if (Math.abs(time - expected) > DRIFT_TOLERANCE) this.restart(time);
+    if (Math.abs(time - expected) > DRIFT_TOLERANCE) this.restart();
   }
 
   private stop(): void {
@@ -143,16 +143,16 @@ class PreviewAudio {
     setTimeout(() => s.gain.disconnect(), 100);
   }
 
-  private restart(time: number): void {
+  private restart(): void {
     this.stop();
     if (useUiStore.getState().settings.editor.muted) return;
     const cues = usePreviewStore.getState().audioCues;
     if (cues.length === 0) return;
     const token = this.token;
-    void this.begin(cues, time, token);
+    void this.begin(cues, token);
   }
 
-  private async begin(cues: readonly AudioCue[], requested: number, token: number): Promise<void> {
+  private async begin(cues: readonly AudioCue[], token: number): Promise<void> {
     const prepared = await soundBank.prepare(cues);
     if (token !== this.token) return;
     reportMissingSounds(prepared.missing);
@@ -161,7 +161,7 @@ class PreviewAudio {
     const transport = useTransportStore.getState();
     if (!transport.playing) return;
     // 准备期间时间轴可能往前走了一点：从现在的时刻排
-    const from = transport.time >= requested ? transport.time : requested;
+    const from = transport.time;
     const gain = c.createGain();
     gain.connect(c.destination);
     const startAt = c.currentTime + 0.01;
@@ -171,16 +171,19 @@ class PreviewAudio {
 
   /** SoundField 的试听：放一次这个事件（多个变体时每点一次换下一个）。不受时间轴静音的影响：这是用户明确要听 */
   async preview(eventId: string): Promise<void> {
+    const token = ++this.auditionToken;
     this.audition?.stop();
     this.audition = null;
     const variants = (await window.allay.resources.soundVariants(eventId).catch(() => null)) ?? [];
+    if (token !== this.auditionToken) return;
     const playable = variants.filter((v) => v.weight > 0);
     const turn = this.auditionTurn.get(eventId) ?? 0;
     this.auditionTurn.set(eventId, turn + 1);
     const variant = playable.length > 0 ? playable[turn % playable.length]! : null;
     // 下载缓存里还没取回的：试听是用户操作，按需取回（decisions.md M6b）
-    if (variant && (await soundFileStates([variant.file], false))[variant.file] === 'remote') await soundFileStates([variant.file], true);
+    if (variant && !ImportedSoundIdSchema.safeParse(variant.file).success && (await soundFileStates([variant.file], false))[variant.file] === 'remote') await soundFileStates([variant.file], true);
     const buffer = variant ? await soundBank.buffer(variant.file) : null;
+    if (token !== this.auditionToken) return;
     this.lastAudition = { sound: eventId, file: buffer && variant ? variant.file : null };
     if (!buffer || !variant) {
       reportMissingSounds([eventId], false);

@@ -5,13 +5,14 @@ import { TimelineTrack, type TimelineSegment } from '@allay/ui/editor';
 import { ICON, ICON_WEIGHT } from '@allay/ui/lib/icons';
 import { Pause, Play, Repeat, SkipBack, SkipForward, SpeakerHigh, SpeakerSlash } from '@phosphor-icons/react';
 import { cn } from '@allay/ui/lib/utils';
-import { useEffect, useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePreviewStore } from '../../stores/previewStore';
-import { beginGesture, endGesture, useProjectStore } from '../../stores/projectStore';
+import { useProjectStore } from '../../stores/projectStore';
 import { useTransportStore } from '../../stores/transportStore';
 import { useUiStore } from '../../stores/uiStore';
 import { togglePlay } from '../commands/commands';
+import { startSegmentGesture } from './segment-gesture';
 
 // 时间轴面板（6.4）：跨左、中两列。
 // 标题行 48 px：到开头、播放（圆角方块按钮）、到结尾、循环；大号时间码“当前 / 总时长”；右侧静音。
@@ -25,39 +26,6 @@ export function formatTimecode(t: number, fps: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
 }
 
-/** 播放：按真实时间推进当前时间（这是界面的时钟，模板的 update 只依赖传进去的 t） */
-function usePlayback() {
-  const playing = useTransportStore((s) => s.playing);
-  useEffect(() => {
-    if (!playing) {
-      // 暂停时状态栏不显示预览帧率
-      usePreviewStore.getState().setMeasuredFps(null);
-      return;
-    }
-    let raf = 0;
-    let last: number | null = null;
-    const tick = (now: number) => {
-      const s = useTransportStore.getState();
-      if (last !== null && s.duration > 0) {
-        let next = s.time + (now - last) / 1000;
-        if (next >= s.duration) {
-          if (s.loop) next = next % s.duration;
-          else {
-            s.setTime(s.duration);
-            s.setPlaying(false);
-            return;
-          }
-        }
-        s.setTime(next);
-      }
-      last = now;
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [playing]);
-}
-
 export function TimelinePanel() {
   const { t, i18n } = useTranslation();
   const time = useTransportStore((s) => s.time);
@@ -69,9 +37,11 @@ export function TimelinePanel() {
   const template = useProjectStore((s) => s.template);
   const params = useProjectStore((s) => s.params);
   const ready = usePreviewStore((s) => s.status.kind === 'ready');
+  const timing = usePreviewStore((s) => s.loaded?.timing);
   const audioCues = usePreviewStore((s) => s.audioCues);
   const muted = useUiStore((s) => s.settings.editor.muted);
-  usePlayback();
+  const structureRevision = useProjectStore((s) => s.structureRevision);
+  const finishGesture = useRef<(() => void) | null>(null);
 
   const total = duration > 0 ? frameCount(duration, output.fps) : 0;
   const cues = useMemo(() => (ready ? audioCues.map((c) => c.at) : []), [audioCues, ready]);
@@ -83,9 +53,10 @@ export function TimelinePanel() {
       const def = template!.params.find((p) => p.key === s.param);
       if (!def || def.type !== 'duration') return [];
       const v = params[s.param];
-      return [{ key: s.param, label: localize(s.label ?? def.label, i18n.language), duration: typeof v === 'number' ? v : def.default, min: def.min, max: def.max }];
+      const duration = (timing?.editable === false ? timing.durations[s.param] : undefined) ?? (typeof v === 'number' ? v : def.default);
+      return [{ key: s.param, label: localize(s.label ?? def.label, i18n.language), duration, min: def.min, max: def.max, defaultDuration: def.default }];
     });
-  }, [template, params, i18n.language]);
+  }, [template, params, timing, i18n.language]);
 
   return (
     <section aria-label={t('timeline.region')} className="flex h-timeline shrink-0 flex-col rounded-xl bg-surface-1" data-testid="timeline-panel">
@@ -139,10 +110,12 @@ export function TimelinePanel() {
         </Button>
       </div>
       <TimelineTrack
+        key={structureRevision}
         duration={duration}
         time={time}
         fps={output.fps}
         segments={segments}
+        readOnlySegments={timing?.editable === false}
         cutTime={cutTime}
         cues={cues}
         disabled={!ready}
@@ -150,15 +123,33 @@ export function TimelinePanel() {
           scrub: t('transport.scrub'),
           cut: t('transport.cut'),
           boundary: (a, b) => t('transport.boundary', { left: a, right: b }),
+          endHandle: (label) => t('timeline.endHandle', { label }),
           stages: t('timeline.stages'),
           sound: t('timeline.sound'),
           cutTrack: t('timeline.cut'),
+          stageStart: (label) => t('timeline.stageStart', { label }),
+          stageEnd: (label) => t('timeline.stageEnd', { label }),
+          resetStage: (label) => t('timeline.resetStage', { label }),
+          goToFrame: (timecode) => t('timeline.goToFrame', { timecode }),
+          goToCut: t('timeline.goToCut'),
+          beforeCut: t('timeline.beforeCut'),
+          goToCue: (timecode) => t('timeline.goToCue', { timecode }),
+          audioToggle: muted ? t('transport.unmute') : t('transport.mute'),
         }}
         formatTime={(x) => formatTimecode(x, output.fps)}
         onSeekStart={() => useTransportStore.getState().setPlaying(false)}
         onSeek={(x) => useTransportStore.getState().setTime(x)}
-        onSegmentChange={(key, d) => useProjectStore.getState().setParams({ [key]: d }, i18n.language)}
-        onGesture={(phase) => (phase === 'start' ? beginGesture() : endGesture())}
+        onSegmentChange={(key, d) => {
+          if (usePreviewStore.getState().loaded?.timing?.editable !== false) useProjectStore.getState().setParams({ [key]: d }, i18n.language);
+        }}
+        onGesture={(phase) => {
+          if (phase === 'start') finishGesture.current = startSegmentGesture();
+          else {
+            finishGesture.current?.();
+            finishGesture.current = null;
+          }
+        }}
+        onToggleAudio={() => useUiStore.getState().setEditor({ muted: !useUiStore.getState().settings.editor.muted })}
       />
     </section>
   );

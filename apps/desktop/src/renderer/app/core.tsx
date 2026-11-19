@@ -148,8 +148,10 @@ function BackgroundMenu({ icon }: MenuItemComponentProps) {
 const MENU_ITEMS: MenuItemDef[] = [
   // 文件
   { id: 'file.new', menu: 'file', group: 0, order: 0, command: 'newProject', titleKey: 'project.new', testId: 'project-new' },
-  { id: 'file.open', menu: 'file', group: 0, order: 1, command: 'openProject', titleKey: 'project.open', testId: 'project-open' },
-  { id: 'file.recents', menu: 'file', group: 0, order: 2, icon: ClockCounterClockwise, component: RecentsMenu },
+  { id: 'file.newAnimation', menu: 'file', group: 0, order: 1, command: 'newAnimation', testId: 'menu-new-animation' },
+  { id: 'file.newAnimationFromTemplate', menu: 'file', group: 0, order: 2, command: 'newAnimationFromTemplate', testId: 'menu-new-animation-from-template' },
+  { id: 'file.open', menu: 'file', group: 0, order: 3, command: 'openProject', titleKey: 'project.open', testId: 'project-open' },
+  { id: 'file.recents', menu: 'file', group: 0, order: 4, icon: ClockCounterClockwise, component: RecentsMenu },
   { id: 'file.save', menu: 'file', group: 1, order: 0, command: 'saveProject', titleKey: 'project.save', testId: 'project-save' },
   { id: 'file.saveAs', menu: 'file', group: 1, order: 1, command: 'saveProjectAs', titleKey: 'project.saveAs', testId: 'project-save-as' },
   { id: 'file.importTemplate', menu: 'file', group: 2, order: 0, icon: ArrowSquareIn, component: ImportTemplateItem },
@@ -166,7 +168,10 @@ const MENU_ITEMS: MenuItemDef[] = [
   { id: 'view.background', menu: 'view', group: 1, order: 0, icon: Checkerboard, component: BackgroundMenu },
   { id: 'view.guides', menu: 'view', group: 1, order: 1, command: 'guides', titleKey: 'preview.guides' },
   { id: 'view.toggleLeft', menu: 'view', group: 1, order: 2, command: 'toggleLeft' },
-  { id: 'view.palette', menu: 'view', group: 2, order: 0, command: 'palette', titleKey: 'menu.commandPalette' },
+  { id: 'view.code', menu: 'view', group: 2, order: 0, command: 'showCodeEditor', testId: 'menu-code-editor' },
+  { id: 'view.authoring', menu: 'view', group: 2, order: 1, command: 'showAuthoringTools', testId: 'menu-authoring-tools' },
+  { id: 'view.preview', menu: 'view', group: 2, order: 2, command: 'showPreview', testId: 'menu-back-to-preview' },
+  { id: 'view.palette', menu: 'view', group: 2, order: 2, command: 'palette', titleKey: 'menu.commandPalette' },
   // 帮助
   { id: 'help.settings', menu: 'help', group: 0, order: 0, command: 'settings', titleKey: 'topbar.settings' },
   { id: 'help.shortcuts', menu: 'help', group: 0, order: 1, command: 'settings', titleKey: 'settings.pages.shortcuts', input: { page: 'shortcuts' }, icon: Keyboard },

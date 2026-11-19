@@ -1,7 +1,10 @@
 import { FilmStrip, Scissors, SpeakerSimpleHigh } from '@phosphor-icons/react';
 import { cn } from 'cn';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../components/ui/context-menu';
 import { ICON, ICON_WEIGHT } from '../lib/icons';
+import { trackEditorPointer } from './track-editor-pointer';
+import { nearestCue, segmentAt, snapSegment } from './timeline-edit';
 
 // Transport 的多轨时间轴（6.4）：左侧轨道名列，右侧每条轨道是一条凹槽圆角条。
 // - 帧刻度（等宽数字）；
@@ -26,6 +29,7 @@ export interface TimelineSegment {
   duration: number;
   min: number;
   max: number;
+  defaultDuration?: number;
 }
 
 export interface TimelineTrackProps {
@@ -34,16 +38,23 @@ export interface TimelineTrackProps {
   fps: number;
   /** 各段之和不等于 duration 时不画色段（4.3） */
   segments: readonly TimelineSegment[];
+  readOnlySegments?: boolean;
   cutTime: number | null;
   /** 音效 cue 的时间（秒）；空数组表示这个模板没有音效 */
   cues: readonly number[];
   disabled?: boolean;
-  labels: { scrub: string; cut: string; boundary(left: string, right: string): string; stages: string; sound: string; cutTrack: string };
+  labels: {
+    scrub: string; cut: string; boundary(left: string, right: string): string; endHandle(label: string): string;
+    stages: string; sound: string; cutTrack: string;
+    stageStart(label: string): string; stageEnd(label: string): string; resetStage(label: string): string;
+    goToFrame(time: string): string; goToCut: string; beforeCut: string; goToCue(time: string): string; audioToggle: string;
+  };
   formatTime(t: number): string;
   onSeek(t: number): void;
   onSeekStart?(): void;
   onSegmentChange(key: string, duration: number): void;
   onGesture(phase: 'start' | 'end'): void;
+  onToggleAudio?(): void;
 }
 
 const SEGMENT_COLORS = ['var(--stage-enter)', 'var(--stage-hold)', 'var(--stage-exit)', 'var(--cue)', 'var(--amethyst)'];
@@ -121,24 +132,45 @@ interface BoundaryDrag {
   min: number;
   max: number;
   secPerPx: number;
+  fps: number;
   lastX: number;
   value: number;
   raf: number;
   stop(): void;
 }
 
-function TrackName({ icon, children, muted, row }: { icon: ReactNode; children: ReactNode; muted?: boolean; row: number }) {
+type Lane = 'phase' | 'audio' | 'cut';
+type MenuTarget = { lane: Lane; time: number; segmentKey?: string };
+
+function openLaneMenu(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  element.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+  }));
+}
+
+function menuKey(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openLaneMenu(event.currentTarget);
+}
+
+function TrackName({ icon, children, muted, row, lane, disabled }: { icon: ReactNode; children: ReactNode; muted?: boolean; row: number; lane: Lane; disabled?: boolean }) {
   return (
-    <div className={cn('col-start-1 flex min-w-0 items-center gap-2 pl-3.5 text-fg-muted', muted && 'text-fg-subtle')} style={{ gridRow: row }}>
+    <button type="button" className={cn('col-start-1 flex min-w-0 items-center gap-2 rounded-sm pl-3.5 text-fg-muted focus-visible:outline-2 focus-visible:outline-(--ring)', muted && 'text-fg-subtle')}
+      style={{ gridRow: row }} data-timeline-lane={lane} disabled={disabled} aria-haspopup="menu" onKeyDown={menuKey} onClick={(event) => openLaneMenu(event.currentTarget)}>
       <span className="shrink-0 text-fg-faint">{icon}</span>
       <span className="truncate">{children}</span>
-    </div>
+    </button>
   );
 }
 
 export function TimelineTrack(props: TimelineTrackProps) {
-  const { duration, time, fps, segments, cutTime, cues, disabled, labels, formatTime, onSeek, onSeekStart, onSegmentChange, onGesture } = props;
+  const { duration, time, fps, segments, cutTime, cues, disabled, labels, formatTime, onSeek, onSeekStart, onSegmentChange, onGesture, onToggleAudio } = props;
+  const gridRef = useRef<HTMLDivElement>(null);
   const lanesRef = useRef<HTMLDivElement>(null);
+  const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null);
   const [width, setWidth] = useState(0);
   /** 正在拖的分界线：它的值和按下时冻结的总时长（整条时间轴按它布局，分界线才会停在指针下） */
   const [boundaryView, setBoundaryView] = useState<{ index: number; value: number; view: number } | null>(null);
@@ -157,6 +189,7 @@ export function TimelineTrack(props: TimelineTrackProps) {
   const segmentSum = shownSegments.reduce((a, s) => a + s.duration, 0);
   const isSettling = settling !== null && Math.abs(segmentSum - settling) < 1e-6;
   const showSegments = boundaryView !== null || isSettling || segmentsMatch(segments, duration);
+  const hasEndHandle = showSegments && segments.length > 0 && segments.at(-1)!.max > segments.at(-1)!.min;
   /** 布局用的总时长：拖分界线时冻结在按下时，等引擎报回新时长时用各段之和，其余时候就是时长 */
   const view = boundaryView ? boundaryView.view : isSettling ? segmentSum : duration;
   const frameCount = Math.max(1, Math.round(duration * fps) + 1);
@@ -164,6 +197,8 @@ export function TimelineTrack(props: TimelineTrackProps) {
   const frame = Math.min(lastFrame, Math.round(time * fps));
   const viewLastFrame = Math.max(0, Math.round(view * fps));
   const pct = (t: number) => (view > 0 ? `${(Math.min(view, Math.max(0, t)) / view) * 100}%` : '0%');
+  const draggingEnd = hasEndHandle && boundaryView?.index === segments.length - 1;
+  const phasePct = (t: number) => draggingEnd && view > 0 ? `${t / view * 100}%` : pct(t);
   const snap = (t: number) => Math.round(t * fps) / fps;
 
   useLayoutEffect(() => {
@@ -256,6 +291,7 @@ export function TimelineTrack(props: TimelineTrackProps) {
     scrubTo(d, e.clientX);
   };
   const onTrackKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     const step = (e.shiftKey ? 10 : 1) / fps;
     if (e.key === 'ArrowRight') onSeek(Math.min(duration, snap(time + step)));
     else if (e.key === 'ArrowLeft') onSeek(Math.max(0, snap(time - step)));
@@ -270,21 +306,24 @@ export function TimelineTrack(props: TimelineTrackProps) {
   // ---- 分界线 ----
   let acc = 0;
   const bounds = shownSegments.map((s) => (acc += s.duration));
-  const boundaryTo = (d: BoundaryDrag, clientX: number) => {
-    const f = latest.current.fps;
-    const next = Math.min(d.max, Math.max(d.min, Math.round((d.from + (clientX - d.origin) * d.secPerPx) * f) / f));
+  const applyBoundary = (d: BoundaryDrag, next: number) => {
     if (next === d.value) return;
     d.value = next;
     setBoundaryView((v) => (v ? { ...v, value: next } : v));
     latest.current.onSegmentChange(d.key, next);
+  };
+  const boundaryTo = (d: BoundaryDrag, clientX: number) => {
+    const value = clientX === d.origin ? d.from : snapSegment(d.from + (clientX - d.origin) * d.secPerPx, d.fps, d.min, d.max);
+    applyBoundary(d, value);
   };
   const onBoundaryDown = (index: number) => (e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled || e.button !== 0) return;
     e.stopPropagation();
     if (scrubRef.current || boundaryRef.current) return;
     const seg = segments[index]!;
-    capture(e.currentTarget, e.pointerId);
     const rect = lanesRef.current!.getBoundingClientRect();
+    if (rect.width <= 0 || view <= 0) return;
+    e.currentTarget.focus({ preventScroll: true });
     const unlock = lockCursor('ew-resize');
     const d: BoundaryDrag = {
       index,
@@ -294,12 +333,14 @@ export function TimelineTrack(props: TimelineTrackProps) {
       min: seg.min,
       max: seg.max,
       secPerPx: view / rect.width,
+      fps,
       lastX: e.clientX,
       value: seg.duration,
       raf: 0,
       stop: () => undefined,
     };
-    const stopTracking = trackPointer(
+    const stopTracking = trackEditorPointer(
+      e.currentTarget,
       e.pointerId,
       (ev) => {
         d.lastX = ev.clientX;
@@ -309,12 +350,13 @@ export function TimelineTrack(props: TimelineTrackProps) {
             boundaryTo(d, d.lastX);
           });
       },
-      (ev, canceled) => {
+      (ev) => {
         cancelAnimationFrame(d.raf);
         d.raf = 0;
-        boundaryTo(d, canceled ? d.lastX : ev.clientX);
+        if (ev) boundaryTo(d, ev.clientX);
+        else applyBoundary(d, d.from);
         d.stop();
-        if (d.value !== d.from) expectSum(d.key, d.value);
+        expectSum(d.key, d.value);
         setBoundaryView(null);
         latest.current.onGesture('end');
       },
@@ -329,15 +371,19 @@ export function TimelineTrack(props: TimelineTrackProps) {
     onGesture('start');
   };
   const onBoundaryKey = (index: number) => (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (disabled || boundaryRef.current) return;
+    menuKey(e);
     const seg = segments[index]!;
     const step = (e.shiftKey ? 10 : 1) / fps;
     let next: number;
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = seg.duration + step;
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = seg.duration - step;
+    else if (index === segments.length - 1 && e.key === 'Home') next = seg.min;
+    else if (index === segments.length - 1 && e.key === 'End') next = seg.max;
     else return;
     e.preventDefault();
     e.stopPropagation();
-    const value = Math.min(seg.max, Math.max(seg.min, snap(next)));
+    const value = e.key === 'Home' || e.key === 'End' ? next : snapSegment(next, fps, seg.min, seg.max);
     if (value === seg.duration) return;
     expectSum(seg.key, value);
     onSegmentChange(seg.key, value);
@@ -353,9 +399,34 @@ export function TimelineTrack(props: TimelineTrackProps) {
   const hasCut = cutTime !== null && duration > 0;
   const cutFrame = hasCut ? Math.round(cutTime * fps) : 0;
   const rows = ['24px', '40px', '30px', ...(hasCut ? ['30px'] : [])].join(' ');
+  const seek = (target: number) => {
+    onSeekStart?.();
+    onSeek(Math.min(duration, Math.max(0, target)));
+  };
+  const selectedIndex = menuTarget?.lane === 'phase' && showSegments ? segments.findIndex((segment) => segment.key === menuTarget.segmentKey) : -1;
+  const selected = segments[selectedIndex];
+  const cue = menuTarget?.lane === 'audio' ? nearestCue(cues, menuTarget.time) : undefined;
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[124px_1fr] gap-y-1 pr-3 pb-3 select-none" style={{ gridTemplateRows: rows }} data-testid="timeline">
+    <ContextMenu disabled={disabled} onOpenChange={(open, details) => {
+      if (!open) return;
+      const event = details.event;
+      const point = event instanceof MouseEvent ? event : event instanceof TouchEvent ? event.touches[0] : undefined;
+      const rect = lanesRef.current?.getBoundingClientRect();
+      if (!point || !rect || !rect.width || boundaryRef.current) return details.cancel();
+      const target = event.target instanceof Element ? event.target : null;
+      const hit = Array.from(gridRef.current?.querySelectorAll<HTMLElement>('[data-timeline-lane]') ?? []).find((element) => {
+        const laneRect = element.getBoundingClientRect();
+        return point.clientY >= laneRect.top && point.clientY < laneRect.bottom;
+      });
+      if (!hit) return details.cancel();
+      const lane = hit.dataset.timelineLane as Lane;
+      const at = point.clientX < rect.left ? time : Math.max(0, Math.min(view, (point.clientX - rect.left) / rect.width * view));
+      const key = target?.closest<HTMLElement>('[data-timeline-segment]')?.dataset.timelineSegment;
+      setMenuTarget({ lane, time: at, segmentKey: key ?? shownSegments[segmentAt(bounds, at)]?.key });
+    }}>
+    <ContextMenuTrigger ref={gridRef} className={cn('grid min-h-0 flex-1 gap-y-1 pr-3 pb-3 select-none', hasEndHandle ? 'grid-cols-[124px_minmax(0,1fr)_clamp(48px,12%,112px)]' : 'grid-cols-[124px_minmax(0,1fr)]', draggingEnd && 'overflow-clip')}
+      style={{ gridTemplateRows: rows }} data-testid="timeline">
       {/* 轨道区（右列）：刻度、各轨和覆盖其上的拖动层、播放头都以它为坐标 */}
       <div ref={lanesRef} className="group/track relative col-start-2 row-span-full row-start-1 min-w-0">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-6 num text-2xs text-fg-subtle" aria-hidden="true">
@@ -371,9 +442,10 @@ export function TimelineTrack(props: TimelineTrackProps) {
         </div>
       </div>
 
-      <TrackName row={2} icon={<FilmStrip size={ICON.sm} weight={ICON_WEIGHT.active} />}>{labels.stages}</TrackName>
+      <TrackName row={2} lane="phase" disabled={disabled} icon={<FilmStrip size={ICON.sm} weight={ICON_WEIGHT.active} />}>{labels.stages}</TrackName>
+      {hasEndHandle && <div className="pointer-events-none col-start-3 row-start-2 rounded-r-lg border border-dashed border-divider bg-well/40" data-testid="timeline-end-room" />}
       {/* 拖分界线时布局冻结，各段之和可能超出轨道：超出的部分裁掉 */}
-      <div className="relative col-start-2 row-start-2 overflow-hidden rounded-lg bg-well">
+      <div className={cn('relative col-start-2 row-start-2 rounded-lg bg-well', !draggingEnd && 'overflow-hidden')}>
         {showSegments &&
           shownSegments.map((s, i) => {
             const first = i === 0;
@@ -381,28 +453,30 @@ export function TimelineTrack(props: TimelineTrackProps) {
             // 窄的色块（停留）只居中显示名称；再窄就什么都不写
             const px = view > 0 ? (s.duration / view) * width : 0;
             const narrow = px < 110;
+            const seconds = props.readOnlySegments ? s.duration.toFixed(3).replace(/0$/, '') : s.duration.toFixed(2);
             return (
               <div
                 key={s.key}
                 data-testid={`timeline-segment-${s.key}`}
-                title={s.label}
+                title={props.readOnlySegments ? `${s.label} · ${seconds} s` : s.label}
+                data-duration={s.duration}
                 className={cn('pointer-events-none absolute inset-y-[3px] flex min-w-0 items-center gap-2 overflow-hidden rounded-md font-medium text-stage-foreground', narrow ? 'justify-center px-2' : 'px-3')}
                 style={{
-                  left: first ? 0 : `calc(${pct(bounds[i]! - s.duration)} + 1px)`,
-                  width: `calc(${pct(s.duration)} - ${first || last ? 1 : 2}px)`,
+                  left: first ? 0 : `calc(${phasePct(bounds[i]! - s.duration)} + 1px)`,
+                  width: `calc(${phasePct(s.duration)} - ${first || last ? 1 : 2}px)`,
                   background: SEGMENT_COLORS[i % SEGMENT_COLORS.length],
                 }}
               >
-                <span className="absolute inset-y-[9px] left-1 w-[3px] rounded-full bg-stage-foreground/55" />
-                <span className="absolute inset-y-[9px] right-1 w-[3px] rounded-full bg-stage-foreground/55" />
+                {!props.readOnlySegments && <span className="absolute inset-y-[9px] left-1 w-[3px] rounded-full bg-stage-foreground/55" />}
+                {!props.readOnlySegments && <span className="absolute inset-y-[9px] right-1 w-[3px] rounded-full bg-stage-foreground/55" />}
                 {px >= 36 && <span className="truncate">{s.label}</span>}
-                {!narrow && <span className="shrink-0 num font-normal opacity-75">{s.duration.toFixed(2)} s</span>}
+                {!narrow && <span className="shrink-0 num font-normal opacity-75">{seconds} s</span>}
               </div>
             );
           })}
       </div>
 
-      <TrackName row={3} icon={<SpeakerSimpleHigh size={ICON.sm} weight={ICON_WEIGHT.active} />} muted={cues.length === 0}>
+      <TrackName row={3} lane="audio" disabled={disabled} icon={<SpeakerSimpleHigh size={ICON.sm} weight={ICON_WEIGHT.active} />} muted={cues.length === 0}>
         {labels.sound}
       </TrackName>
       <div className={cn('relative col-start-2 row-start-3 rounded-lg bg-well', cues.length === 0 && 'opacity-50')} data-testid="timeline-cues">
@@ -413,7 +487,7 @@ export function TimelineTrack(props: TimelineTrackProps) {
 
       {hasCut && (
         <>
-          <TrackName row={4} icon={<Scissors size={ICON.sm} weight={ICON_WEIGHT.active} />}>{labels.cutTrack}</TrackName>
+          <TrackName row={4} lane="cut" disabled={disabled} icon={<Scissors size={ICON.sm} weight={ICON_WEIGHT.active} />}>{labels.cutTrack}</TrackName>
           <div className="relative col-start-2 row-start-4 rounded-lg bg-well">
             <div className="pointer-events-none absolute top-[9px] flex items-center" style={{ left: pct(cutTime) }} title={labels.cut} data-testid="timeline-cut">
               <span className="block size-[11px] -translate-x-1/2 rotate-45 rounded-[2px] bg-mark" />
@@ -440,33 +514,54 @@ export function TimelineTrack(props: TimelineTrackProps) {
           onPointerDown={onTrackDown}
           onKeyDown={onTrackKey}
         />
-        {/* 分界线（最后一段的右端就是终点，不能拖）：命中区落在阶段轨上 */}
-        {showSegments &&
-          shownSegments.slice(0, -1).map((s, i) => (
+        {/* 命中区落在阶段轨上 */}
+        {showSegments && !props.readOnlySegments &&
+          shownSegments.slice(0, hasEndHandle ? undefined : -1).map((s, i) => (
             <div
               key={`b-${s.key}`}
               role="slider"
               tabIndex={disabled ? -1 : 0}
-              aria-label={labels.boundary(s.label, shownSegments[i + 1]!.label)}
+              aria-label={shownSegments[i + 1] ? labels.boundary(s.label, shownSegments[i + 1]!.label) : labels.endHandle(s.label)}
               aria-valuemin={s.min}
               aria-valuemax={s.max}
               aria-valuenow={s.duration}
               aria-valuetext={`${s.duration.toFixed(2)} s`}
-              data-testid={`timeline-boundary-${i}`}
-              className="pointer-events-auto absolute top-7 z-10 h-10 w-3 -translate-x-1/2 cursor-ew-resize touch-none rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-(--ring)"
-              style={{ left: pct(bounds[i]!) }}
+              data-testid={shownSegments[i + 1] ? `timeline-boundary-${i}` : 'timeline-exit-end'}
+              data-timeline-segment={s.key}
+              className={cn('pointer-events-auto absolute top-7 z-10 h-10 w-3 -translate-x-1/2 cursor-ew-resize touch-none rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-(--ring)', !shownSegments[i + 1] && 'z-30 grid w-6 place-items-center')}
+              style={{ left: phasePct(bounds[i]!) }}
               onPointerDown={onBoundaryDown(i)}
               onKeyDown={onBoundaryKey(i)}
-            />
+            >{!shownSegments[i + 1] && <span className="pointer-events-none h-5 w-1 rounded-full bg-stage-foreground outline-2 outline-stage-exit" />}</div>
           ))}
-        <div className="absolute inset-y-0 z-20 w-0" style={{ left: pct(time) }} data-testid="timeline-playhead">
+        <div className="absolute inset-y-0 z-20 w-0" style={{ left: phasePct(time) }} data-testid="timeline-playhead">
           <span className="absolute top-[22px] bottom-0 -left-[0.75px] w-[1.5px] bg-primary" />
           <span data-testid="timeline-playhead-frame" className="absolute top-0.5 left-0 -translate-x-1/2 rounded-[5px] bg-primary px-1.5 py-0.5 num text-2xs font-medium text-primary-foreground">
             {frame}
           </span>
         </div>
       </div>
-    </div>
+    </ContextMenuTrigger>
+    {menuTarget && <ContextMenuContent data-testid="timeline-context-menu">
+      {selected ? <>
+        <ContextMenuItem onClick={() => seek(bounds[selectedIndex - 1] ?? 0)}>{labels.stageStart(selected.label)}</ContextMenuItem>
+        <ContextMenuItem onClick={() => seek(bounds[selectedIndex]!)}>{labels.stageEnd(selected.label)}</ContextMenuItem>
+        {!props.readOnlySegments && selected.defaultDuration !== undefined && <>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={selected.duration === selected.defaultDuration} onClick={() => {
+            expectSum(selected.key, selected.defaultDuration!);
+            onSegmentChange(selected.key, selected.defaultDuration!);
+          }}>{labels.resetStage(selected.label)}</ContextMenuItem>
+        </>}
+      </> : menuTarget.lane === 'cut' && hasCut ? <>
+        <ContextMenuItem onClick={() => seek(cutTime)}>{labels.goToCut}</ContextMenuItem>
+        <ContextMenuItem disabled={cutFrame === 0} onClick={() => seek((cutFrame - 1) / fps)}>{labels.beforeCut}</ContextMenuItem>
+      </> : <ContextMenuItem onClick={() => seek(cue ?? snap(menuTarget.time))}>
+        {cue !== undefined ? labels.goToCue(formatTime(snap(cue))) : labels.goToFrame(formatTime(snap(menuTarget.time)))}
+      </ContextMenuItem>}
+      {menuTarget.lane === 'audio' && onToggleAudio && <ContextMenuItem onClick={onToggleAudio}>{labels.audioToggle}</ContextMenuItem>}
+    </ContextMenuContent>}
+    </ContextMenu>
   );
 }
 

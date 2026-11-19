@@ -58,12 +58,10 @@ pnpm website:build
 产物在 `apps/website/dist/`：
 
 - `index.html`、`simulator.html`、`theme-init.js`
-- `assets/`：脚本、样式、字体（`@fontsource` 的自托管文件）、引擎 Worker
-- `fonts/ark-pixel-12px-proportional-zh_hans.bdf.gz`：兜底像素字体（方舟像素字体的 BDF 原样外套一层 gzip），只在带文字的模板第一次需要时由 Worker 下载解析
+- `assets/`：脚本、样式、引擎 Worker
 - `mc/`：官网专用的原版贴图（见上）
-- `licenses/ark-pixel-font-OFL.txt`：兜底像素字体的许可全文
 
-落地页的中文用系统黑体（苹方、微软雅黑……），Noto Sans SC 只在系统没有中文字体时才下载；仿真器里是应用自己的字体设置。原因和首屏下载量的对比见 `docs/decisions.md` 官网 · 验收返工。
+官网和仿真器沿用应用的系统字体回退，不随站分发或下载文字字体。
 
 ```bash
 pnpm website:preview

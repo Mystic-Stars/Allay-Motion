@@ -4,17 +4,24 @@ import type { StageResult, TemplateEntry } from '../../../shared/templates';
 import { previewEngine } from '../preview/previewEngine';
 import { useNoticeStore } from '../../stores/noticeStore';
 import { clearHistory, useProjectStore } from '../../stores/projectStore';
+import { useResourceStore } from '../../stores/resourceStore';
 import { useTemplateStore } from '../../stores/templateStore';
 import { DEFAULT_TEMPLATE_ID, readTemplate } from '../../templates/catalog';
 import { trialRun, type TrialResult } from './trial';
+import { boundResourceEdition, creationParams } from './profileDefaults';
 
-/** 选一个已安装的模板：参数取默认值（text 按界面语言取一次） */
-export async function selectTemplate(id: string, version: string, locale: string, params: Readonly<Record<string, unknown>> = {}): Promise<boolean> {
+async function activateTemplate(id: string, version: string, locale: string, params: Readonly<Record<string, unknown>>, fresh: boolean): Promise<boolean> {
   const source = await readTemplate(id, version);
   if (!source) return false;
-  useProjectStore.getState().setTemplate(source, params, locale);
+  const resource = boundResourceEdition(useResourceStore.getState().state);
+  useProjectStore.getState().setTemplate(source, fresh ? creationParams(source, locale, resource, params) : params, locale);
   previewEngine.retry();
   return true;
+}
+
+/** 显式新选；导入模板和载入已有对象不走这条入口。 */
+export function selectTemplate(id: string, version: string, locale: string, params: Readonly<Record<string, unknown>> = {}): Promise<boolean> {
+  return activateTemplate(id, version, locale, params, true);
 }
 
 /** 启动时：取模板列表，选旗舰模板的最高版本（没有就选第一个能装载的） */
@@ -69,7 +76,9 @@ function report(t: TFunction, outcome: InstallOutcome): void {
 
 async function afterInstall(t: TFunction, outcome: InstallOutcome, locale: string): Promise<InstallOutcome> {
   report(t, outcome);
-  if (outcome.kind === 'installed' && !outcome.entry.baseMissing) await selectTemplate(outcome.entry.id, outcome.entry.version, locale);
+  if (outcome.kind === 'installed' && !outcome.entry.baseMissing) {
+    await activateTemplate(outcome.entry.id, outcome.entry.version, locale, {}, false);
+  }
   return outcome;
 }
 

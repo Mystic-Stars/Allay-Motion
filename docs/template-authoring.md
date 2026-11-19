@@ -49,6 +49,7 @@ export default {
 | 成员 | 签名 | 说明 |
 |---|---|---|
 | `ctx.THREE` | `THREE: typeof THREE` | three.js（r187）。只声明了常用的类和成员，见本文件末尾的 THREE 命名空间；没列出的成员运行时照样可用 |
+| `ctx.locale` | `readonly locale: string` | 宿主在装载时提供的语言标签，例如 zh-CN；省略时为 en |
 | `ctx.params` | `params: Readonly<ParamValues>` | 参数值（manifest 的 params 声明）。已经清洗过：类型不对的回到默认值，越界的钳制，缺的补默认值 |
 | `ctx.stage` | `stage: Readonly<StageInfo>` | 舞台：设计单位下的宽高（短边恒为 1080，原点在中心，+y 向上）、宽高比、帧率、像素比例 |
 | `ctx.scene` | `scene: THREE.Scene` | 往里加东西的场景。setup 结束后引擎回收场景里剩下的几何体和材质 |
@@ -57,10 +58,13 @@ export default {
 | `ctx.createStageCamera` | `createStageCamera(opts: { fov: number }): THREE.PerspectiveCamera` | 建一台透视相机（fov 是垂直视角，度），位置已算好，z = 0 平面恰好填满舞台 |
 | `ctx.resources` | 对象 | 贴图、方块、物品。都在 setup 里 await 完，update 里不要再取 |
 | `ctx.resources.texture` | `texture(id: string): Promise<THREE.Texture>` | 已设好过滤和色彩空间的贴图；缺失时返回占位图并记一条警告。.mcmeta 动画由引擎按 t 自动播放 |
+| `ctx.resources.optionalTexture` | `optionalTexture(id: string): Promise<THREE.Texture \| null>` | 同一已授权资源栈和原 ID；取不到时返回 null，不返回占位贴图。同一资源代内缓存探测结果 |
 | `ctx.resources.block` | `block(id: string, opts?: { shading?: boolean }): Promise<BlockHandle>` | 方块目录里的方块；不认识的 ID 用占位贴图的立方体并记一条警告 |
 | `ctx.resources.item` | `item(id: string): Promise<ItemHandle>` | 物品目录里的物品（方块 ID 按方块渲染）；不认识的 ID 用占位贴图并记一条警告 |
-| `ctx.text` | 对象 | 用资源栈里的字体排一段文字 |
-| `ctx.text.create` | `create(opts: TextOptions): TextObject` | 建一个文字对象；字体已在 setup 之前载好，所以是同步的 |
+| `ctx.text` | 对象 | 用资源栈字体及本机系统字体排一段文字 |
+| `ctx.text.prepare` | `prepare(font: string): Promise<void>` | 按 font 参数声明的字体自动预载；程序生成的字体 ID 可在 setup 里显式预载 |
+| `ctx.text.measureGui` | `measureGui(text: string, font?: string): GuiTextMetrics` | 量一行 GUI 文字的笔宽和基线边界，与 create 选用相同字形，不创建文字贴图或场景对象。 |
+| `ctx.text.create` | `create(opts: TextOptions): TextObject` | 同步创建文字；逐字使用已选资源栈字体、minecraft:default、本机系统字体 |
 | `ctx.sprite` | 对象 | 贴图四边形，可带九宫格 |
 | `ctx.sprite.create` | `create(texture: THREE.Texture, opts?: SpriteOptions): SpriteObject` | 用一张贴图建精灵；中心在原点 |
 | `ctx.random` | `random(key?: string): Rng` | 带种子的随机数（种子取模板的 seed 参数）。同一个 key 总是给出同一串数，不同 key 互不影响。在 setup 里预先算好，update 里只查表 |
@@ -70,8 +74,8 @@ export default {
 | `ctx.time` | 对象 | 时间工具 |
 | `ctx.time.segment` | `segment(t: number, start: number, duration: number): number` | t 在 [start, start + duration] 里的进度，钳制到 [0, 1] |
 | `ctx.audio` | 对象 | 音频提示 |
-| `ctx.audio.cue` | `cue(sound: string \| null, at: number, opts?: { gain?: number; rate?: number; pan?: number }): void` | 在时刻 at（秒）播放音效事件；只能在 setup 里调用。sound 为 null 时什么也不做 |
-| `ctx.warn` | `warn(message: string): void` | 记一条警告，显示在应用里（一次装载最多 50 条） |
+| `ctx.audio.cue` | `cue(sound: string \| null, at: number, opts?: { gain?: number; rate?: number; pan?: number; position?: readonly [x: number, y: number, z: number] }): void` | 在时刻 at（秒）播放音效事件；只能在 setup 里调用。sound 为 null 时什么也不做 |
+| `ctx.warn` | `warn(message: string, code?: 'panorama-fallback'): void` | 记一条警告（一次装载最多 50 条）；实际回退时可在 setup 内附上资源提示码，宿主据此显示简短提示。 |
 
 ctx 交出来的对象：
 
@@ -110,7 +114,7 @@ ctx 交出来的对象：
 |---|---|---|
 | `single` | `single(): THREE.Object3D` | 一个物品的 3D 模型（有厚度的贴图） |
 
-**TextObject**：文字对象。原点：水平方向按 align（左边、中点、右边），垂直方向在整段文字的中线
+**TextObject**：文字对象。默认纵向原点在整段文字中线；guiBaseline 模式用基线，左对齐以笔尖为横向原点。
 
 | 成员 | 签名 | 说明 |
 |---|---|---|
@@ -195,6 +199,8 @@ ctx 交出来的对象：
 - 每个参数都有 `key`（`^[a-z][a-zA-Z0-9]*$`，模板内唯一）和 `label`；可选 `hint`、`group`、`visibleWhen`。
 - 模板有 `seed` 参数时，`ctx.random` 以它为种子。
 - `texture` 参数的值可以原样交给 `ctx.resources.texture()`；`easing` 参数的值交给 `ctx.ease.from()`。
+- 在 `setup` 里用 `await ctx.resources.optionalTexture(id)` 检查可选素材，例如 `minecraft:ui/loading_bar`。它接受和 `texture()` 相同的资源 ID、已授权本机图片或模板资产引用；取不到返回 `null`，不出现品红占位。探测按资源代缓存；需要贴图时仍可用 `texture()`，照常报告缺失。不要修改或释放两者返回的共享贴图。
+- `ctx.locale` 是装载时的宿主语言（例如 `zh-CN`；未提供时 `en`）。用于选择模板内的默认文案，不替换用户输入。
 - 用 `timeline.segments` 把几个 `duration` 参数声明成首尾相接的时间段，播放条上可以拖分界线。
 
 ## 7. 出错时看到什么

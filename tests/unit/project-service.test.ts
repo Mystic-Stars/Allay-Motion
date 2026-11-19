@@ -1,10 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Composition, CompositionClip } from '../../packages/template-sdk/src/composition';
 import { FileGrants } from '../../apps/desktop/src/main/file-grants';
 import { ProjectService } from '../../apps/desktop/src/main/project/service';
-import type { ProjectData } from '../../apps/desktop/src/shared/project';
+import type { ProjectData, QuickProjectData } from '../../apps/desktop/src/shared/project';
 import { ProjectDataSchema } from '../../apps/desktop/src/shared/project';
 import { applyUiPatch, defaultUiSettings, UiSettingsPatchSchema, UiSettingsSchema } from '../../apps/desktop/src/shared/settings';
 
@@ -13,7 +15,7 @@ import { applyUiPatch, defaultUiSettings, UiSettingsPatchSchema, UiSettingsSchem
 
 const log = { info() {}, warn() {}, error() {} } as unknown as ConstructorParameters<typeof ProjectService>[0]['log'];
 
-function data(params: ProjectData['params'] = {}): ProjectData {
+function data(params: QuickProjectData['params'] = {}): QuickProjectData {
   return {
     name: 'demo',
     template: { id: 'allay.builtin.block-wipe', version: '1.0.0' },
@@ -32,6 +34,58 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('工程文件', () => {
+  function compositionProject(params: CompositionClip['params']): ProjectData & { composition: Composition } {
+    const { template, params: _, ...common } = data();
+    return { ...common, composition: { formatVersion: 1, fps: 60, durationFrames: 18_000, tracks: [
+      { id: 'track', name: 'Art', muted: true, locked: false, clips: [
+        { id: 'a', startFrame: 0, durationFrames: 60, sourceInFrame: 0, template, params, profile: 'profile-a', keyframes: [{ frame: 20, opacity: 0.5 }] },
+        { id: 'b', startFrame: 60, durationFrames: 30, sourceInFrame: 2, template, params: { cols: 10 } },
+      ] },
+    ] } };
+  }
+
+  it('T-STUDIO v2 保存独立参数；重启后从本地授权恢复嵌套图片，磁盘工程不带路径或字节', async () => {
+    const grants = new FileGrants();
+    const service = new ProjectService({ userDataDir: dir, appVersion: '0.1.0', grants, log });
+    const image = join(dir, 'art.png');
+    writeFileSync(image, 'image-fixture');
+    const ref = grants.grant(image);
+    const path = join(dir, 'studio.allay');
+    const project = compositionProject({ layers: [{ image: `file:${ref}`, packageTexture: 'asset:art.png' }], second: `file:${ref}` });
+    expect(await service.saveTo(path, project)).toMatchObject({ ok: true });
+    const serialized = readFileSync(path, 'utf8');
+    const token = JSON.parse(serialized).files[0] as string;
+    expect(serialized).not.toContain(image);
+    expect(serialized).not.toContain(ref);
+    expect(serialized).not.toContain('image-fixture');
+    expect(JSON.parse(serialized)).toMatchObject({ formatVersion: 2, composition: { durationFrames: 18_000 }, files: [token] });
+    const reopenedGrants = new FileGrants();
+    const reopened = new ProjectService({ userDataDir: dir, appVersion: '0.1.0', grants: reopenedGrants, log });
+    const opened = await reopened.openPath(path);
+    if (opened.canceled || !opened.ok || !('composition' in opened.data)) throw new Error('open failed');
+    const params = opened.data.composition.tracks[0]!.clips[0]!.params;
+    expect(reopenedGrants.resolve(String(params.second).slice(5))).toBe(image);
+    expect(params.layers).toEqual([{ image: params.second, packageTexture: 'asset:art.png' }]);
+    expect(opened.data.composition.tracks[0]!.clips[1]).toEqual(project.composition.tracks[0]!.clips[1]);
+    expect(opened.data.composition.tracks[0]!.clips[0]!.profile).toBe('profile-a');
+    rmSync(image);
+    const missing = await reopened.openPath(path);
+    expect(missing).toMatchObject({ ok: true, missingFiles: ['a'] });
+    if (missing.canceled || !missing.ok || !('composition' in missing.data)) throw new Error('open failed');
+    expect(missing.data.composition.tracks[0]!.clips[0]!.params.second).toBe(`unlinked-file:${token}`);
+  });
+
+  it('T-STUDIO 不信任未授权图片令牌，v2 不接受路径映射或输出帧率冲突', async () => {
+    const token = randomUUID();
+    const project = compositionProject({ logo: `file:${token}` });
+    const service = new ProjectService({ userDataDir: dir, appVersion: '0.1.0', grants: new FileGrants(), log });
+    const path = join(dir, 'external.allay');
+    writeFileSync(path, JSON.stringify({ ...project, formatVersion: 2, files: [token] }));
+    expect(await service.openPath(path)).toMatchObject({ ok: true, missingFiles: ['a'] });
+    writeFileSync(path, JSON.stringify({ ...project, formatVersion: 2, files: { [token]: join(dir, 'art.png') } }));
+    expect(await service.openPath(path)).toMatchObject({ ok: false, error: 'invalid' });
+    expect(ProjectDataSchema.safeParse({ ...project, output: { ...project.output, fps: 24 } }).success).toBe(false);
+  });
   it('保存后再打开，参数、输出、导出设置原样回来；格式与 1.9 一致', async () => {
     const svc = new ProjectService({ userDataDir: dir, appVersion: '0.1.0', grants: new FileGrants(), log });
     const file = join(dir, 'a.allay');
@@ -41,7 +95,7 @@ describe('工程文件', () => {
     expect(raw).toMatchObject({ formatVersion: 1, appVersion: '0.1.0', template: { id: 'allay.builtin.block-wipe' }, params: { cols: 16 }, files: {} });
     const opened = await svc.openPath(file);
     expect(opened.canceled).toBeFalsy();
-    if (opened.canceled || !opened.ok) throw new Error('open failed');
+    if (opened.canceled || !opened.ok || !('params' in opened.data)) throw new Error('open failed');
     expect(opened.data.params).toEqual({ cols: 16, inPattern: 'diagonal' });
     expect(opened.name).toBe('a');
     expect(svc.pathOf(opened.handle)).toBe(file);
@@ -60,14 +114,14 @@ describe('工程文件', () => {
     expect(raw.files).toEqual({ logo: img });
     expect(raw.params).toEqual({});
     const opened = await svc.openPath(file);
-    if (opened.canceled || !opened.ok) throw new Error('open failed');
+    if (opened.canceled || !opened.ok || !('params' in opened.data)) throw new Error('open failed');
     const v = opened.data.params.logo as string;
     expect(v).toMatch(/^file:[0-9a-f-]{36}$/);
     expect(v).not.toBe(`file:${ref}`);
     expect(grants.resolve(v.slice(5))).toBe(img);
     rmSync(img);
     const again = await svc.openPath(file);
-    if (again.canceled || !again.ok) throw new Error('open failed');
+    if (again.canceled || !again.ok || !('params' in again.data)) throw new Error('open failed');
     expect(again.missingFiles).toEqual(['logo']);
     expect(again.data.params.logo).toBeUndefined();
   });
@@ -79,7 +133,8 @@ describe('工程文件', () => {
       writeFileSync(p, text);
       return p;
     };
-    expect(await svc.openPath(write('new.allay', JSON.stringify({ formatVersion: 2 })))).toMatchObject({ ok: false, error: 'too-new' });
+    expect(await svc.openPath(write('new.allay', JSON.stringify({ formatVersion: 3 })))).toMatchObject({ ok: false, error: 'too-new' });
+    expect(await svc.openPath(write('invalid-v2.allay', JSON.stringify({ formatVersion: 2 })))).toMatchObject({ ok: false, error: 'invalid' });
     expect(await svc.openPath(write('bad.allay', '{nope'))).toMatchObject({ ok: false, error: 'unreadable' });
     expect(await svc.openPath(write('half.allay', JSON.stringify({ formatVersion: 1 })))).toMatchObject({ ok: false, error: 'invalid' });
     expect(await svc.openPath(write('big.allay', 'x'.repeat(3 * 1024 * 1024)))).toMatchObject({ ok: false, error: 'too-large' });

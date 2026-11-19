@@ -15,11 +15,13 @@ import {
   NearestFilter,
   NoBlending,
   OneFactor,
+  OneMinusSrcAlphaFactor,
   OrthographicCamera,
   RawShaderMaterial,
   RGBAFormat,
   Scene,
   UnsignedByteType,
+  Vector2,
   Vector3,
   WebGLRenderTarget,
   type Camera,
@@ -27,6 +29,7 @@ import {
   type Texture,
   type WebGLRenderer,
 } from 'three';
+import type { LayerTransform } from './composition-timing';
 
 /** resolve 的三种模式 */
 export type ResolveMode = 'preview' | 'straight' | 'opaque';
@@ -59,6 +62,23 @@ void main() {
     sum += row;
   }
   fragColor = sum * (uWeight / float(uScale * uScale));
+}`;
+
+const COMPOSITE = /* glsl */ `
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D tSrc;
+uniform vec2 uStage;
+uniform vec2 uOffset;
+uniform vec2 uRotation;
+uniform float uScale;
+uniform float uOpacity;
+out highp vec4 fragColor;
+void main() {
+  vec2 size = vec2(textureSize(tSrc, 0));
+  vec2 p = (gl_FragCoord.xy / size - 0.5) * uStage - uOffset;
+  vec2 uv = mat2(uRotation.x, -uRotation.y, uRotation.y, uRotation.x) * p / (uStage * uScale) + 0.5;
+  fragColor = any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))) ? vec4(0.0) : texture(tSrc, uv) * uOpacity;
 }`;
 
 // 源缓冲是线性、预乘 alpha。
@@ -125,6 +145,20 @@ export interface PipelineRenderOptions {
   update(t: number): void;
 }
 
+interface LayerPass {
+  scene: Scene;
+  camera: Camera;
+  transform: LayerTransform;
+}
+
+export interface CompositionRenderOptions {
+  times: readonly number[];
+  stage: { width: number; height: number };
+  layersAt(time: number, draw: (layer: LayerPass) => void): void;
+}
+
+type RenderOptions = PipelineRenderOptions | CompositionRenderOptions;
+
 export class FramePipeline {
   private width: number;
   private height: number;
@@ -133,6 +167,8 @@ export class FramePipeline {
   private readonly maxSize: number;
   private sceneRT: WebGLRenderTarget;
   private accumRT: WebGLRenderTarget;
+  private compositionRT: WebGLRenderTarget | null = null;
+  private composite: RawShaderMaterial | null = null;
   private outRT: WebGLRenderTarget | null = null;
 
   private readonly passScene = new Scene();
@@ -209,6 +245,7 @@ export class FramePipeline {
     this.height = height;
     this.scale = this.scaleFor(width, height);
     this.sceneRT.setSize(width * this.scale, height * this.scale);
+    this.compositionRT?.setSize(width * this.scale, height * this.scale);
     this.accumRT.setSize(width, height);
     this.outRT?.setSize(width, height);
   }
@@ -230,7 +267,7 @@ export class FramePipeline {
   }
 
   /** 渲染所有子帧，返回存着线性、预乘 alpha 结果的纹理 */
-  private renderSubframes(opts: PipelineRenderOptions): Texture {
+  private renderSubframes(opts: RenderOptions): Texture {
     const { renderer } = this;
     const n = opts.times.length;
     renderer.setClearColor(0x000000, 0);
@@ -238,20 +275,79 @@ export class FramePipeline {
     // N = 1 也经过累积通道：超采样的平均在那里做（权重 1，加到清空的 accumRT 上，结果与直接写入相同）
     renderer.setRenderTarget(this.accumRT);
     renderer.clear(true, false, false);
-    this.accumulate.uniforms.tSrc!.value = this.sceneRT.texture;
+    const layered = 'layersAt' in opts;
+    const target = layered ? this.prepareComposition() : this.sceneRT;
+    this.accumulate.uniforms.tSrc!.value = target.texture;
     this.accumulate.uniforms.uWeight!.value = 1 / n;
     this.accumulate.uniforms.uScale!.value = this.scale;
-    for (let k = 0; k < n; k++) {
-      opts.update(opts.times[k]!);
-      renderer.setRenderTarget(this.sceneRT);
-      renderer.clear(true, true, false);
-      renderer.render(opts.scene, opts.camera);
-
+    const draw = layered ? this.compositionPass(opts, target) : null;
+    for (const time of opts.times) {
+      if (layered) {
+        renderer.setRenderTarget(target);
+        renderer.clear(true, false, false);
+        opts.layersAt(time, draw!);
+      } else {
+        opts.update(time);
+        this.drawScene(opts.scene, opts.camera);
+      }
       renderer.setRenderTarget(this.accumRT);
       this.passMesh.material = this.accumulate;
       renderer.render(this.passScene, this.passCamera);
     }
     return this.accumRT.texture;
+  }
+
+  private drawScene(scene: Scene, camera: Camera): void {
+    this.renderer.setRenderTarget(this.sceneRT);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.clear(true, true, false);
+    this.renderer.render(scene, camera);
+  }
+
+  private prepareComposition(): WebGLRenderTarget {
+    this.composite ??= new RawShaderMaterial({
+      glslVersion: GLSL3,
+      vertexShader: VERTEX,
+      fragmentShader: COMPOSITE,
+      uniforms: {
+        tSrc: { value: this.sceneRT.texture }, uStage: { value: new Vector2() }, uOffset: { value: new Vector2() },
+        uRotation: { value: new Vector2() }, uScale: { value: 1 }, uOpacity: { value: 1 },
+      },
+      transparent: true,
+      blending: CustomBlending,
+      blendEquation: AddEquation,
+      blendSrc: OneFactor,
+      blendDst: OneMinusSrcAlphaFactor,
+      blendEquationAlpha: AddEquation,
+      blendSrcAlpha: OneFactor,
+      blendDstAlpha: OneMinusSrcAlphaFactor,
+      depthTest: false,
+      depthWrite: false,
+    });
+    return this.compositionRT ??= halfFloatTarget(this.sceneRT.width, this.sceneRT.height, 0, false);
+  }
+
+  private compositionPass(opts: CompositionRenderOptions, target: WebGLRenderTarget): (layer: LayerPass) => void {
+    const material = this.composite!;
+    const uniforms = material.uniforms;
+    (uniforms.uStage!.value as Vector2).set(opts.stage.width, opts.stage.height);
+    return ({ scene, camera, transform }) => {
+      if (transform.opacity <= 0 || transform.scale <= 0) return;
+      this.drawScene(scene, camera);
+      this.renderer.setRenderTarget(target);
+      (uniforms.uOffset!.value as Vector2).set(transform.x, transform.y);
+      const radians = transform.rotation * Math.PI / 180;
+      (uniforms.uRotation!.value as Vector2).set(Math.cos(radians), Math.sin(radians));
+      uniforms.uScale!.value = transform.scale;
+      uniforms.uOpacity!.value = Math.min(1, transform.opacity);
+      this.passMesh.material = material;
+      this.renderer.render(this.passScene, this.passCamera);
+    };
+  }
+
+  clearComposition(): void {
+    this.compositionRT?.dispose();
+    this.compositionRT = null;
   }
 
   private runResolve(source: Texture, mode: ResolveMode, flipY: boolean, background: readonly [number, number, number]): void {
@@ -265,7 +361,7 @@ export class FramePipeline {
   }
 
   /** 预览：画到 canvas（默认帧缓冲） */
-  renderToCanvas(opts: PipelineRenderOptions): void {
+  renderToCanvas(opts: RenderOptions): void {
     const autoClear = this.renderer.autoClear;
     this.renderer.autoClear = false;
     try {
@@ -281,7 +377,7 @@ export class FramePipeline {
    * 导出：resolve 到 8 位目标并读回。返回直通 alpha（或不透明）的 RGBA8，第一行是画面顶部。
    * background 是线性 RGB，只在 opaque 模式下用。
    */
-  renderToPixels(opts: PipelineRenderOptions, mode: Exclude<ResolveMode, 'preview'>, background: readonly [number, number, number]): Uint8Array<ArrayBuffer> {
+  renderToPixels(opts: RenderOptions, mode: Exclude<ResolveMode, 'preview'>, background: readonly [number, number, number]): Uint8Array<ArrayBuffer> {
     if (!this.outRT) throw new Error('this pipeline has no output target');
     const autoClear = this.renderer.autoClear;
     this.renderer.autoClear = false;
@@ -311,6 +407,8 @@ export class FramePipeline {
   }
 
   dispose(): void {
+    this.clearComposition();
+    this.composite?.dispose();
     this.sceneRT.dispose();
     this.accumRT.dispose();
     this.outRT?.dispose();

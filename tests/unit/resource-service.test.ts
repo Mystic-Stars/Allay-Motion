@@ -47,7 +47,6 @@ async function makeService(opts: { game?: boolean; downloader?: VanillaDownloade
   const svc = new ResourceService({
     userDataDir: userData,
     builtinDir: join(dir, 'no-builtin'),
-    fallbackFontFile: join(import.meta.dirname, '../../resources/fonts/ark-pixel/ark-pixel-12px-proportional-zh_hans.bdf'),
     settings,
     log,
     gameEnv: { platform: 'win32', appData, home: appData },
@@ -72,6 +71,7 @@ describe('ResourceService', () => {
     const s = svc.state();
     expect(s.detecting).toBe(false);
     expect(s.hasAssets).toBe(false);
+    expect(s.vanilla.active).toBeNull();
     expect(s.layers.map((l) => l.kind)).toEqual(['builtin']);
     expect(s.layers[0]!.empty).toBe(true);
     expect(s.vanilla).toMatchObject({ consent: null, local: null, cached: null, active: null });
@@ -147,7 +147,8 @@ describe('ResourceService', () => {
     writeZip(evil, [{ name: '../escape.txt', data: 'x' }, { name: tex('stone'), data: solidPng('#ff00ff') }]);
     expect(await svc.addPackFromPath(evil)).toMatchObject({ ok: false, error: 'rejected' });
     expect(existsSync(join(dir, 'escape.txt'))).toBe(false);
-    expect(readdirSync(join(userData, 'packs')).filter((f) => !f.startsWith('.'))).toEqual([]);
+    const packs = join(userData, 'packs');
+    expect(existsSync(packs) ? readdirSync(packs) : []).toEqual([]);
     expect(svc.state().stamp).toBe(before);
     expect(await svc.addPackFromPath(join(dir, 'nope.txt'))).toMatchObject({ ok: false });
     svc.close();
@@ -163,7 +164,6 @@ describe('ResourceService', () => {
     const again = new ResourceService({
       userDataDir: join(dir, 'userData'),
       builtinDir: join(dir, 'no-builtin'),
-      fallbackFontFile: join(dir, 'none.bdf'),
       settings,
       log,
       gameEnv: { platform: 'win32', appData: join(dir, 'appdata'), home: dir },
@@ -174,16 +174,20 @@ describe('ResourceService', () => {
     const s = again.state();
     expect(s.brokenPacks).toEqual([expect.objectContaining({ name: 'gone', problem: 'missing' })]);
     expect(s.layers.map((l) => l.kind)).toEqual(['builtin']);
-    expect(await again.fallbackFontTables()).toBeNull();
+    expect(await again.fontProviders('minecraft:default')).toBeNull();
     again.close();
   });
 
-  it('字体：资源栈里的 default.json（reference 展开）；兜底字体是方舟像素字体', async () => {
+  it('T-AST-FONT：只列出启用包的字体；旧引用走游戏默认，保留包内 TTF provider', async () => {
     const { svc } = await makeService();
     const folder = join(dir, 'font-pack');
     writeFiles(folder, {
       'assets/minecraft/font/default.json': JSON.stringify({ providers: [{ type: 'reference', id: 'minecraft:include/space' }, { type: 'bitmap', file: 'minecraft:font/ascii.png', ascent: 7, chars: ['AB'] }, { type: 'unihex', hex_file: 'x' }] }),
       'assets/minecraft/font/include/space.json': JSON.stringify({ providers: [{ type: 'space', advances: { ' ': 4 } }] }),
+      'assets/minecraft/textures/font/ascii.png': solidPng('#abcdef'),
+      'assets/example/font/hud.json': JSON.stringify({ providers: [{ type: 'ttf', file: 'example:hud.ttf' }] }),
+      'assets/example/font/hud.ttf': new Uint8Array(12),
+      'assets/allay/font/fallback.json': JSON.stringify({ providers: [{ type: 'space', advances: { ' ': 9 } }] }),
     });
     await svc.addPackFromPath(folder);
     const f = await svc.fontProviders('minecraft:default');
@@ -191,10 +195,14 @@ describe('ResourceService', () => {
       { type: 'space', advances: [[32, 4]] },
       { type: 'bitmap', file: 'assets/minecraft/textures/font/ascii.png', ascent: 7, height: 8, rows: [[65, 66]] },
     ]);
-    expect(f?.skipped).toContain('unihex');
+    expect(f?.skipped).toContain('unihex(invalid)');
+    expect(await svc.fontIds()).toEqual(['example:hud', 'minecraft:default', 'minecraft:include/space']);
+    expect((await svc.fontProviders('example:hud'))?.providers[0]).toMatchObject({ type: 'ttf', file: 'assets/example/font/hud.ttf' });
+    for (const legacy of ['allay:fallback', `user-font:${'a'.repeat(64)}`]) expect(await svc.fontProviders(legacy)).toEqual(f);
     expect(await svc.fontProviders('minecraft:nope')).toBeNull();
-    const fallback = await svc.fallbackFontTables();
-    expect(fallback?.codepoints.length).toBeGreaterThan(20_000);
+    await svc.removeLayer(svc.state().layers.find((layer) => layer.kind === 'pack')!.id);
+    expect(await svc.fontIds()).toEqual([]);
+    expect(await svc.fontProviders('example:hud')).toBeNull();
     svc.close();
   });
 
@@ -271,8 +279,8 @@ describe('ResourceService', () => {
     });
     expect(await svc.addPackFromPath(a)).toMatchObject({ ok: true });
     expect(await svc.soundVariants('minecraft:block.stone.place')).toEqual([
-      { file: 'minecraft:test/a1', volume: 1, pitch: 1, weight: 1 },
-      { file: 'minecraft:test/a2', volume: 0.5, pitch: 2, weight: 3 },
+      { file: 'minecraft:test/a1', volume: 1, pitch: 1, weight: 1, kind: 'effect' },
+      { file: 'minecraft:test/a2', volume: 0.5, pitch: 2, weight: 3, kind: 'effect' },
     ]);
     expect(await svc.addPackFromPath(b)).toMatchObject({ ok: true });
     // b 在上层：追加
@@ -296,7 +304,7 @@ describe('ResourceService', () => {
     expect(await svc.addPackFromPath(pack)).toMatchObject({ ok: true });
     const lib = await svc.soundLibrary();
     expect(lib.stamp).toBe(svc.resourceStamp);
-    expect(lib.events).toEqual([
+    expect(lib.events).toMatchObject([
       { id: 'minecraft:ambient.cave', state: 'missing' },
       { id: 'minecraft:block.stone.place', state: 'local' },
       { id: 'mypack:fx.boom', state: 'local' },
@@ -337,7 +345,7 @@ describe('ResourceService', () => {
     const { svc } = await makeService({ game: true, downloader });
     await svc.setVanilla({ consent: true });
     expect(svc.state().vanilla.active).toBe('cached');
-    expect((await svc.soundLibrary()).events).toEqual([{ id: 'minecraft:block.stone.place', state: 'remote' }]);
+    expect((await svc.soundLibrary()).events).toMatchObject([{ id: 'minecraft:block.stone.place', state: 'remote', source: 'vanilla' }]);
     expect(await svc.soundFiles(['minecraft:dig/stone1', 'minecraft:nope'], false)).toEqual({ ok: true, states: { 'minecraft:dig/stone1': 'remote', 'minecraft:nope': 'missing' } });
     expect(fetched).toEqual([]);
     // 离线：取不到，报 network，状态仍是 remote，不报错
@@ -345,7 +353,7 @@ describe('ResourceService', () => {
     online = true;
     expect(await svc.soundFiles(['minecraft:dig/stone1'], true)).toEqual({ ok: true, states: { 'minecraft:dig/stone1': 'local' } });
     expect(fetched).toEqual(['b'.repeat(40)]);
-    expect((await svc.soundLibrary()).events).toEqual([{ id: 'minecraft:block.stone.place', state: 'local' }]);
+    expect((await svc.soundLibrary()).events).toMatchObject([{ id: 'minecraft:block.stone.place', state: 'local', source: 'vanilla' }]);
     svc.close();
   });
 
@@ -353,7 +361,7 @@ describe('ResourceService', () => {
     const { svc } = await makeService({ game: true });
     await svc.setVanilla({ consent: true });
     expect(svc.state().vanilla.active).toBe('local');
-    expect((await svc.soundLibrary()).events).toEqual([{ id: 'minecraft:block.stone.place', state: 'local' }]);
+    expect((await svc.soundLibrary()).events).toMatchObject([{ id: 'minecraft:block.stone.place', state: 'local', source: 'vanilla' }]);
     rmSync(join(dir, 'appdata', '.minecraft', 'assets', 'objects', 'bb'), { recursive: true });
     expect(await svc.soundFiles(['minecraft:dig/stone1'], true)).toEqual({ ok: true, states: { 'minecraft:dig/stone1': 'missing' } });
     svc.close();

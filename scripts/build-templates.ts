@@ -5,11 +5,11 @@
 // - manifest 经 template-sdk 的 schema 校验，id 必须以 allay. 开头。
 // - 包里只有 manifest.json、template.js、README.md（若有）和 assets/ 下白名单扩展名的文件。
 // - 产物是确定的：同样的源码产出逐字节相同的 .allaytpl。
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import { isReservedId, parseManifest, type TemplateManifest } from '../packages/template-sdk/src/index';
+import { parseManifest, type TemplateManifest } from '../packages/template-sdk/src/index';
 import { writeZip, type ZipInput } from '../apps/desktop/src/main/templates/zip-writer';
 import { analyzeTemplateCode } from '../apps/desktop/src/shared/template-code';
 import { PACKAGE_EXTENSIONS, packageFileName } from '../apps/desktop/src/shared/templates';
@@ -18,26 +18,37 @@ const ROOT = resolve(import.meta.dirname, '..');
 export const TEMPLATES_SRC = join(ROOT, 'packages/templates');
 export const TEMPLATES_OUT = join(ROOT, 'resources/templates');
 
-/** packages/templates 下的模板目录（有 manifest.json 的） */
+/** 当前随应用分发的原始六款；用户模板仍由独立的导入流程装载。 */
+export const BUILTIN_TEMPLATE_NAMES = [
+  'advancement-toast', 'block-fall', 'block-wipe', 'item-stinger', 'loading-screen', 'pixel-dissolve',
+] as const;
+
+/** 意外放回已撤下的目录时构建失败，不能悄悄重新分发。 */
 export function templateDirs(): string[] {
-  return readdirSync(TEMPLATES_SRC)
+  const dirs = readdirSync(TEMPLATES_SRC)
     .map((name) => join(TEMPLATES_SRC, name))
     .filter((dir) => statSync(dir).isDirectory() && existsSync(join(dir, 'manifest.json')))
     .sort();
+  const expected: readonly string[] = BUILTIN_TEMPLATE_NAMES;
+  const extra = dirs.filter((dir) => !expected.includes(basename(dir)));
+  const missing = expected.filter((name) => !dirs.some((dir) => basename(dir) === name));
+  if (extra.length || missing.length) throw new Error(`built-in catalog must contain the original six only; extra: ${extra.map((dir) => basename(dir)).join(', ')}; missing: ${missing.join(', ')}`);
+  return dirs;
 }
 
 export function readTemplateManifest(dir: string): TemplateManifest {
   const parsed = parseManifest(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')));
   if (!parsed.ok) throw new Error(`${relative(ROOT, dir)}/manifest.json: ${parsed.issues.map((i) => `${i.path}: ${i.message}`).join('; ')}`);
-  if (!isReservedId(parsed.manifest.id)) throw new Error(`${parsed.manifest.id}: built-in template ids must start with "allay."`);
+  if (parsed.manifest.id !== `allay.builtin.${basename(dir)}`) throw new Error(`${parsed.manifest.id}: id does not match template directory ${basename(dir)}`);
   return parsed.manifest;
 }
 
 /** 把模板源码打成不含 import 的单文件 ESM 文本 */
-export async function bundleTemplate(dir: string): Promise<string> {
+export async function bundleTemplate(dir: string, onSource?: (path: string) => void): Promise<string> {
   const result = await build({
     entryPoints: [join(dir, 'src/index.ts')],
     bundle: true,
+    metafile: true,
     write: false,
     format: 'esm',
     platform: 'neutral',
@@ -55,6 +66,12 @@ export async function bundleTemplate(dir: string): Promise<string> {
       },
     ],
   });
+  const root = realpathSync(dir);
+  for (const input of Object.keys(result.metafile.inputs)) {
+    const path = realpathSync(input);
+    if (!path.startsWith(`${root}${sep}`)) throw new Error(`${dir}: unexpected bundled source ${input}`);
+    onSource?.(path);
+  }
   const out = result.outputFiles[0];
   if (!out) throw new Error(`${relative(ROOT, dir)}: esbuild produced no output`);
   const code = out.text;

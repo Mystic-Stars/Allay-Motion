@@ -137,3 +137,39 @@ test('M6b 离线混音：没有 cue、或全部缺失时不产生音频；缺失
   expect(loud.peak).toBeLessThanOrEqual(29_205);
   expect(loud.peak).toBeGreaterThan(29_000);
 });
+
+test('T-EXP-4 T1/T2 只在开启时定位方块声音，背景音乐单独播放一次', async () => {
+  for (const template of ['allay.builtin.block-wipe', 'allay.builtin.block-fall']) {
+    const original = await call('templateAudio', template, SMALL, {});
+    const enabled = await call('templateAudio', template, SMALL, { spatialAudio: true, music: 'minecraft:music.menu' });
+    const effects = enabled.filter((entry) => entry.sound !== 'minecraft:music.menu');
+    expect(original.length).toBeGreaterThan(0);
+    expect(original.every((entry) => entry.spatial === undefined)).toBe(true);
+    expect(effects.map(({ at }) => at)).toEqual(original.map(({ at }) => at));
+    const spatial = effects.map((entry) => entry.spatial);
+    expect(spatial.some((entry) => (entry?.pan ?? 0) > 0.2)).toBe(true);
+    expect(spatial.some((entry) => (entry?.pan ?? 0) < -0.2)).toBe(true);
+    expect(spatial.some((entry) => (entry?.gain ?? 1) < 0.99)).toBe(true);
+    const music = enabled.filter((entry) => entry.sound === 'minecraft:music.menu');
+    expect(music).toHaveLength(1);
+    expect(music[0]?.at).toBe(0);
+    expect(music[0]?.spatial).toBeUndefined();
+  }
+});
+
+test('T-EXP-4 空间声道能量、距离和裁切：预览调度与导出使用同一图', async () => {
+  const input = { ...cue(0, 'test:sine/440/500'), clip: { offset: 0, end: 0.25 } };
+  const left = await call('spatialMix', { ...input, spatial: { pan: -1, gain: 1 } });
+  const right = await call('spatialMix', { ...input, spatial: { pan: 1, gain: 0.5 } });
+  const music = await call('spatialMix', { ...input, variant: { ...input.variant!, kind: 'music' }, spatial: { pan: 1, gain: 0.5 } });
+  expect(left.left.live).toBeGreaterThan(100);
+  expect(left.right.live).toBeCloseTo(0, 5);
+  expect(right.left.live).toBeCloseTo(0, 5);
+  expect(right.right.live / left.left.live).toBeCloseTo(0.25, 5);
+  expect(music.right.live).toBeCloseTo(music.left.live, 5);
+  for (const result of [left, right, music]) {
+    expect(result.left.live).toBeCloseTo(result.left.offline, 2);
+    expect(result.right.live).toBeCloseTo(result.right.offline, 2);
+    expect(result.tail).toBeCloseTo(0, 5);
+  }
+});

@@ -9,6 +9,11 @@ import { launchApp, makeUserDataDir, readMainLog, removeUserDataDir } from './he
  * 绝不在这里放合法参数：files.pickImage 的合法调用会弹出对话框。
  */
 const MALFORMED: Record<string, unknown[][]> = {
+  'skins.list': [[1]],
+  'skins.importPng': [[], ['C:\\skin.png'], ['classic', 'C:\\skin.png']],
+  'skins.fetchJava': [[], ['name/../x', 'en'], ['ValidName', true], ['ValidName', 'en', 'https://example.test']],
+  'skins.read': [[], ['skins:../../outside'], ['file:3f2504e0-4f89-41d3-9a0c-0305e82c3301']],
+  'skins.remove': [[], ['skins:../outside'], ['3f2504e0-4f89-41d3-9a0c-0305e82c3301']],
   'app.info': [[1], [{}], ['x'], [null]],
   'settings.get': [[1], [{ theme: 'light' }], [null]],
   'settings.set': [
@@ -114,15 +119,24 @@ const MALFORMED: Record<string, unknown[][]> = {
   ],
   'resources.readTexture': [[], [42], [null], ['x'.repeat(600)]],
   'resources.soundLibrary': [[1], ['minecraft']],
+  'sound.pick': [[], ['C:\\x.ogg'], ['effect', 'C:\\x.ogg']],
+  'sound.list': [[1]],
+  'sound.read': [[], ['../x'], ['C:\\x.ogg'], ['user-audio:123', 42]],
+  'sound.fetchNames': [['https://example.com/file'], [42]],
   'resources.soundFiles': [[], [['minecraft:dig/stone1']], [['minecraft:dig/stone1'], 'yes'], [['../x'], false], [['C:\\x.ogg'], true], ['minecraft:dig/stone1', true], [Array.from({ length: 300 }, (_, i) => `minecraft:x${i}`), false]],
   'resources.soundVariants': [[], [42], [null], ['../x'], ['C:\\x'], ['no-namespace'], ['Minecraft:Block.Stone'], ['x'.repeat(300)]],
   'resources.list': [[42], ['../'], ['C:\\'], [null]],
   'resources.fontProviders': [[], [42], ['x'.repeat(600)]],
-  'resources.fallbackFont': [[1]],
+  'fonts.list': [[42], ['C:\\Windows']],
   'resources.detectMinecraft': [[1], ['C:\\Games']],
   'resources.setVanilla': [[], [null], [{ consent: 'yes' }], [{ dir: 'C:\\Games' }], [{ enabled: true }, 'x']],
   // 合法的 chooseGameDir、addPack 会弹对话框，这里只有畸形参数
   'resources.chooseGameDir': [[1], ['C:\\Games']],
+  'resources.selectProfile': [[], ['C:\\Games']],
+  'resources.officialVersions': [[1]],
+  'resources.locateProfile': [[], ['C:\\Games', 'game'], ['local:' + '0'.repeat(32), 'C:\\Games']],
+  'resources.instancePacks': [[], ['C:\\Games']],
+  'resources.setInstancePack': [[], ['local:' + '0'.repeat(32), 'C:\\Games', true]],
   // 合法的 downloadVanilla 会联网，这里只有畸形参数
   'resources.downloadVanilla': [[1], [{ url: 'https://evil.example/x.jar' }]],
   'resources.cancelDownload': [[1]],
@@ -197,6 +211,7 @@ const MALFORMED: Record<string, unknown[][]> = {
   'project.openRequested': [[], [null], ['C:\\x.allay'], [{ token: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }], ['3f2504e0-4f89-41d3-9a0c-0305e82c3301', 'extra']],
   'templates.installRequested': [[], [null], ['C:\\x.allaytpl'], [{ path: 'C:\\x.allaytpl' }], ['3f2504e0-4f89-41d3-9a0c-0305e82c3301', 'extra']],
   'host.ready': [[1], ['C:\\x.allay']],
+  'host.setMacMenuState': [[], [{ enabled: ['openProject'], textEditing: false, path: 'C:\\x.allay' }], [{ enabled: ['unknown'], textEditing: false }]],
   'project.openRecent': [[], ['C:\\x.allay'], [42], ['3f2504e0-4f89-41d3-9a0c-0305e82c3301', 'extra']],
   'project.save': [
     [],
@@ -305,6 +320,22 @@ test('T-ARC-6 每个 IPC 方法都拒绝畸形参数，未授权的路径读不�
     expect(log).toContain('rejected malformed arguments');
     expect(log).toContain('unknown file reference');
     expect(log).not.toContain('handler failed');
+  } finally {
+    await app.close();
+    removeUserDataDir(dir);
+  }
+});
+
+test('T-AST-FONT：桌面只暴露资源字体目录，不提供独立字体上传或回退文件', async () => {
+  const dir = makeUserDataDir();
+  const { app, page } = await launchApp(dir);
+  try {
+    const result = await page.evaluate(async () => ({
+      methods: Object.keys(window.allay.fonts),
+      catalog: await window.allay.fonts.list(),
+      fallback: 'fallbackFont' in window.allay.resources,
+    }));
+    expect(result).toEqual({ methods: ['list'], catalog: { resources: [] }, fallback: false });
   } finally {
     await app.close();
     removeUserDataDir(dir);

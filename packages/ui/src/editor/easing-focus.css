@@ -1,0 +1,21 @@
+.bezier-editor {
+  position: relative;
+  background: var(--well);
+  border-radius: var(--r-tile);
+}
+
+.bezier-editor[data-active='true'] {
+  z-index: 2;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-float);
+}
+
+[data-testid='param-panel']:has(.bezier-editor[data-active='true']) [data-testid^='param-row-']:not(:has(.bezier-editor[data-active='true'])),
+[data-testid='param-panel']:has(.bezier-editor[data-active='true']) [data-testid^='param-group-'] {
+  opacity: 0.42;
+}
+
+.bezier-editor [role='slider']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

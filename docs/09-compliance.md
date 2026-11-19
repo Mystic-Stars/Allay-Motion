@@ -37,9 +37,10 @@
 |---|---|---|
 | 安装包内置原版贴图、音效、字体、模型 | 明确不允许 | 不做。用三层资源栈（`03-assets.md`） |
 | 读取用户本机已安装的游戏文件 | 不涉及分发 | 只读、不复制、不上传；首次使用前询问一次 |
+| 导入本机普通未加密基岩资源包与皮肤 PNG | 仅用于用户自己的本机创作 | 不上传、不随仓库或安装包分发；不执行资源包内代码，不解密或读取模型 |
 | 用户导出的视频里出现 Minecraft 素材 | 这是用户自己的视频创作，适用准则里关于视频内容的条款 | 在关于页给出准则链接，不替用户做判断 |
-| 应用自己的界面使用模仿 Minecraft 字体的字体 | 字体属于其品牌 | 不用。界面像素字用通用的开源像素字体（9.7） |
-| 模板里的文字在有原版层时用游戏的字体 | 字形来自用户本机，属于视频内容 | 允许 |
+| 品牌字标、菜单、首次启动引导和编辑器控件使用游戏字或仿游戏字 | 游戏字体属于其品牌 | 不用。界面使用系统 UI 字体，代码使用系统原生等宽字体 |
+| 作品内容或明确的字形样张使用游戏字形 | 来源限于用户已授权并启用的资源层 | 仅在相应资源许可范围内使用；不新增样张界面 |
 | **用悦灵做 logo 和吉祥物；用 Allay / 悦灵做产品名** | **准则不支持，有风险** | 见 9.4，必须由人决定 |
 
 ## 9.4 品牌决定（H-BRAND）
@@ -66,6 +67,7 @@
 - **无论选哪条路，下面这些都要做到：**
   - 产品名里不出现 “Minecraft”，它只出现在副标题和描述里。
   - 不使用 Minecraft 的 logo、字标、官方美术图，不使用模仿其字体的字体。
+  - §9.3 允许在作品中使用已授权的游戏字形，不等于授权将其用于产品字标、菜单、启动页或官网标题；切换语言或启用资源包都不改变这条边界。见[现行字体决策](decisions.md)。本次字体变更不代替 H-BRAND 的人工确认。
   - 关于页、安装程序、启动画面、项目主页和仓库说明都带非官方声明。
   - 不拿含有这个形象或名字的东西去注册商标，不卖周边。
   - 应用免费。如果以后打算收费或接受赞助，先回到本节重新评估。
@@ -89,8 +91,7 @@
   ```json
   [
     { "path": "resources/builtin-pack/**", "origin": "generated", "generator": "scripts/gen-builtin-pack.ts", "license": "项目自有" },
-    { "path": "packages/mascot/assets/**", "origin": "generated", "generator": "pnpm mascot:bake", "license": "项目自有" },
-    { "path": "packages/ui/assets/fonts/Inter*.woff2", "origin": "third-party", "source": "https://github.com/rsms/inter", "author": "Rasmus Andersson", "license": "OFL-1.1" }
+    { "path": "packages/mascot/assets/**", "origin": "generated", "generator": "pnpm mascot:bake", "license": "项目自有" }
   ]
   ```
 
@@ -108,12 +109,8 @@
 | Pixel Perfection Legacy（延续版，覆盖到当前版本） | 各处标注不一致：一个平台标 CC-BY-4.0 却链接到 BY-SA 的条文，另一个平台标“自定义许可”，仓库里没有许可文件，还有多位贡献者 | **引入前必须由人向维护者确认并留存书面答复**（H-PACK） |
 | ProgrammerArt（deathcap） | CC BY 4.0 | 只到 1.9 的命名，不适用 |
 | Faithful、Bare Bones、Unity 等常见资源包 | 自定义许可、保留所有权利或禁止商用 | 不能内置 |
-| 方舟像素字体（Ark Pixel Font）、缝合像素字体（Fusion Pixel Font） | 字体 OFL 1.1 | **推荐作为内置像素字体**，自带中文，画风通用 |
-| GNU Unifont | OFL 1.1 与 GPLv2+（带字体嵌入例外）双许可 | 可选。游戏里的中日韩字形用的就是它，想让模板里的中文更像游戏时可以用 |
-| Monocraft | OFL 1.1 | 不用。它模仿的是 Minecraft 的字体 |
-| IBM Plex Sans、IBM Plex Mono | OFL 1.1 | 界面字体（英文与数字、等宽数字与时间码）。用 `@fontsource/ibm-plex-sans`、`@fontsource/ibm-plex-mono`，只引用 400/500/600 与 400/500。用户于 2026-11-13 同意引入 |
-| Noto Sans SC（思源黑体） | OFL 1.1 | 界面的中文字体。用 `@fontsource/noto-sans-sc`（按 unicode-range 分片），只引用 400/500/600。用户于 2026-11-13 同意引入 |
-| Inter | OFL 1.1 | 第四版界面起不再使用（换成 IBM Plex） |
+
+桌面与官网不分发或下载文字字体，也不单独导入用户字体文件。作品可读取授权资源包中的字体提供器；逐字回退及旧工程兼容规则见 `03-assets.md` 3.9。
 
 - 界面图标用 Phosphor（`@phosphor-icons/react`，MIT），代码依赖，走 9.8 的许可检查；不自绘图标。
 - 内置层默认是项目自制的程序化贴图，**不依赖上表中的任何资源包**。并入开放许可的资源包只是提升画质的可选项。
@@ -124,7 +121,7 @@
 
 项目自己的许可证：用户已定（2026-11-14）为 **GPL-3.0 + 商业授权**（`GPL-3.0-only`，见 README 的“许可”一节和 `docs/decisions.md` M8）。依赖因此必须**同时兼容 GPL-3.0 和将来的商业授权**：版权人要能把整个应用以非 GPL 的条款另行授权，所以仍然不得引入 GPL、AGPL 的第三方依赖。允许列表不变：
 
-- 允许：MIT、BSD、ISC、Apache-2.0、0BSD、Zlib、CC0。字体允许 OFL。
+- 允许：MIT、BSD、ISC、Apache-2.0、0BSD、Zlib、CC0。生产依赖不引入文字字体包。
 - 不允许进入应用包：GPL、AGPL、SSPL，以及任何带“禁止某类用途”条款的许可。
 - LGPL 只允许一处：以独立进程调用的 FFmpeg。
 - `scripts/check-licenses.ts` 在 CI 里扫描生产依赖，遇到不在允许列表里的许可就失败。
@@ -146,7 +143,8 @@
 
 ## 9.10 隐私与网络
 
-- v1 没有账号、遥测、崩溃上报、在线素材。联网的例外只有两处：用户触发的原版素材下载（`docs/decisions.md` M2a）和自动更新（`docs/decisions.md`“自动更新”：只读本仓库 GitHub / GitCode 的 Release，不带用户信息，可在设置里关闭）。
+- v1 没有账号、遥测、崩溃上报、在线素材库。已有的联网例外为用户触发的原版素材下载（`docs/decisions.md` M2a）和自动更新（`docs/decisions.md`“自动更新”：只读本仓库 GitHub / GitCode 的 Release，不带用户信息，可在设置里关闭）。
+- 另经用户明确批准：仅在用户主动“按 Java 正版名获取皮肤”并在主进程对话框同意当次发送该玩家名后，查询公开 Java 档案并下载该皮肤。主进程仅用固定 HTTPS GET 路径访问 `api.mojang.com`、`sessionserver.mojang.com` 和 `textures.minecraft.net`，不跟随跳转；拒绝即不查询。不登录、不上传文件、不后台查询，不查询基岩或 Xbox 账号。皮肤只存本机库，不进仓库或安装包；授权不是对 Mojang 条款的确认，仍按 `docs/decisions.md` 的 H-DOWNLOAD 核对。
 - 渲染进程的网络访问在会话层被拦截（`01-product-architecture.md` 1.6）。
 - 日志只写在本机的应用数据目录。“复制诊断信息”由用户自己决定发给谁。
 

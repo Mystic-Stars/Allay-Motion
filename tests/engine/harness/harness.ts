@@ -1,6 +1,9 @@
 // test:engine 的测试页：用应用里同一份 EngineHost（Worker、Comlink、看门狗）驱动引擎，
 // 在页面里算好统计量再交给 Playwright，避免把整帧像素序列化回 Node。
 import builtins from 'virtual:builtin-templates';
+import { probeComposition } from './composition';
+import { probeStudioObjects } from './studio-objects';
+import { probeStudioPlayer } from './studio-player';
 import alphaRects from '../../fixtures/templates/alpha-rects.js?raw';
 import movingRect from '../../fixtures/templates/moving-rect.js?raw';
 import randomInUpdate from '../../fixtures/templates/random-in-update.js?raw';
@@ -16,11 +19,13 @@ import devRandomUpdate from '../../fixtures/templates/dev/random-update.js?raw';
 import devOrderDependent from '../../fixtures/templates/dev/order-dependent.js?raw';
 import { EngineHost, type WatchdogTimeouts } from '../../../apps/desktop/src/renderer/engine-host/EngineHost';
 import { mixOffline } from '../../../apps/desktop/src/renderer/audio/mix';
+import { scheduleCues } from '../../../apps/desktop/src/renderer/audio/schedule';
 import { SoundBank } from '../../../apps/desktop/src/renderer/audio/sound-bank';
 import { encodeWav } from '../../../apps/desktop/src/renderer/audio/wav';
 import { ANIM_COLORS, FAKE_STAMP, fakeColor, fakeResolveResource, setFakeVanillaFont } from './fake-resources';
+import { versionedTexture } from './versioned-resources';
 import { frameCount } from '../../../packages/engine/src/frames';
-import { diagnosticOf, TemplateManifestSchema, type AudioCue, type FrameQuality, type TemplateDiagnostic, type OutputSettings, type ParamValues, type TemplateManifest } from '../../../packages/template-sdk/src/index';
+import { diagnosticOf, TemplateManifestSchema, type AudioCue, type CompositionLoadRequest, type FrameQuality, type TemplateDiagnostic, type OutputSettings, type ParamValues, type TemplateManifest } from '../../../packages/template-sdk/src/index';
 
 const fixture = (params: unknown[] = []) =>
   TemplateManifestSchema.parse({ formatVersion: 1, id: 'test.engine.fixture', version: '0.0.0', name: 'fixture', category: 'transition', params });
@@ -70,11 +75,21 @@ function sourceOf(key: TemplateKey): { code: string; manifest: TemplateManifest 
   return { code: b.code, manifest: TemplateManifestSchema.parse(b.manifest) };
 }
 
-async function exportEngine(name: TemplateKey, output: OutputSettings, params: ParamValues = {}, timeouts?: Partial<WatchdogTimeouts>) {
+async function exportEngine(name: TemplateKey, output: OutputSettings, params: ParamValues = {}, timeouts?: Partial<WatchdogTimeouts>, fixtures?: { missing?: string[] }) {
   const { code, manifest } = sourceOf(name);
-  const host = await EngineHost.create({ mode: 'export', resolveResource: fakeResolveResource, strictDeterminism: true, timeouts });
-  const loaded = await host.load({ manifest, code, params, output, resourceStamp: FAKE_STAMP });
-  return { host, loaded };
+  const requestedTextures = new Set<string>();
+  const host = await EngineHost.create({ mode: 'export', strictDeterminism: true, timeouts, resolveResource: async (kind, id) => {
+    if (!fixtures || kind !== 'texture') return fakeResolveResource(kind, id);
+    requestedTextures.add(id);
+    return fixtures.missing?.includes(id) ? null : versionedTexture(id);
+  } });
+  try {
+    const loaded = await host.load({ manifest, code, params, output, resourceStamp: fixtures ? 'test-versioned' : FAKE_STAMP, ...(fixtures ? { locale: 'en' } : {}) });
+    return { host, loaded, requestedTextures };
+  } catch (error) {
+    host.dispose();
+    throw error;
+  }
 }
 
 function alphaOf(buf: Uint8Array): { min: number; max: number } {
@@ -134,6 +149,9 @@ function shuffled(n: number): number[] {
 }
 
 const harness = {
+  probeComposition,
+  probeStudioObjects,
+  probeStudioPlayer,
   frameCount,
   /** 内置模板的 id 与 manifest */
   builtins: () => Object.fromEntries(Object.entries(builtins).map(([id, b]) => [id, b.manifest])),
@@ -150,8 +168,8 @@ const harness = {
    * T-TPL-3/4：装载一个模板，返回 warnings、时长、剪辑点，首帧、剪辑点那一帧（round(cutTime × fps)）、末帧的 alpha 极值。
    * hashes 为真时另做 T-ENG-1：全部帧顺序渲染一遍、在另一个 Worker 里乱序渲染一遍，逐帧比较 SHA-256。
    */
-  async tplCheck(name: TemplateKey, output: OutputSettings, quality: FrameQuality, params: ParamValues, hashes: boolean) {
-    const { host, loaded } = await exportEngine(name, output, params);
+  async tplCheck(name: TemplateKey, output: OutputSettings, quality: FrameQuality, params: ParamValues, hashes: boolean, fixtures?: { missing?: string[] }) {
+    const { host, loaded, requestedTextures } = await exportEngine(name, output, params, undefined, fixtures);
     try {
       const total = frameCount(loaded.duration, output.fps);
       const cutIndex = loaded.cutTime === null ? null : Math.round(loaded.cutTime * output.fps);
@@ -167,7 +185,7 @@ const harness = {
       if (hashes) {
         const seq: string[] = [];
         for (let i = 0; i < total; i++) seq.push(await sha256(await host.renderFrame(i, quality)));
-        const other = await exportEngine(name, output, params);
+        const other = await exportEngine(name, output, params, undefined, fixtures);
         try {
           const shuf: string[] = new Array<string>(total);
           for (const i of shuffled(total)) shuf[i] = await sha256(await other.host.renderFrame(i, quality));
@@ -194,7 +212,59 @@ const harness = {
         }
         distinct = new Set(seq).size;
       }
-      return { warnings: loaded.warnings, duration: loaded.duration, cutTime: loaded.cutTime, cues: loaded.audioCues.length, total, cutIndex, first, last, cut, deterministic, mismatched, distinct, debug };
+      return { warnings: loaded.warnings, textures: [...requestedTextures].sort(), duration: loaded.duration, cutTime: loaded.cutTime, cues: loaded.audioCues.length, total, cutIndex, first, last, cut, deterministic, mismatched, distinct, debug };
+    } finally {
+      host.dispose();
+    }
+  },
+
+  async versionedPixels(name: TemplateKey, output: OutputSettings, params: ParamValues, indices: number[], points: [number, number][], missing: string[] = []) {
+    const { host, loaded, requestedTextures } = await exportEngine(name, output, params, undefined, { missing });
+    try {
+      const frames = [];
+      for (const index of indices) {
+        const pixels = await host.renderFrame(index, { subframes: 1, shutterAngle: 0 });
+        frames.push(points.map(([x, y]) => px(pixels, output.width, x, y)));
+      }
+      return { frames, textures: [...requestedTextures].sort(), warnings: loaded.warnings };
+    } finally {
+      host.dispose();
+    }
+  },
+
+  async versionedComposition(name: TemplateKey, params: ParamValues) {
+    const { manifest, code } = sourceOf(name);
+    const template = { id: manifest.id, version: manifest.version };
+    const output = { width: 160, height: 90, fps: 24 } as const;
+    const request: CompositionLoadRequest = {
+      output, locale: 'en', sources: [{ template, manifest, code, resourceStamp: 'versioned-composition' }],
+      composition: { formatVersion: 1, fps: output.fps, durationFrames: 48, tracks: [{
+        id: 'track', name: 'track', locked: false, muted: false, clips: [{
+          id: 'end', template, params, startFrame: 6, sourceInFrame: 3, durationFrames: 31,
+        }],
+      }] },
+    };
+    const textures = new Set<string>();
+    const resources = async (kind: Parameters<typeof fakeResolveResource>[0], id: string) => {
+      if (kind !== 'texture') return fakeResolveResource(kind, id);
+      textures.add(id);
+      return versionedTexture(id);
+    };
+    const host = await EngineHost.create({ mode: 'export', strictDeterminism: true, resolveResource: resources });
+    const quality = { subframes: 8, shutterAngle: 180 };
+    try {
+      const loaded = await host.loadComposition(request, [resources]);
+      const before = await host.renderFrame(5, quality);
+      const first = await host.renderFrame(12, quality);
+      const later = await host.renderFrame(24, quality);
+      const after = await host.renderFrame(37, quality);
+      const deterministic = await host.checkDeterminism(12, [37, 24, 5], quality);
+      const points = [[5, 5], [10, 45], [150, 75]] as const;
+      return {
+        textures: [...textures].sort(), warnings: loaded.warnings, deterministic,
+        alpha: [before, first, later, after].map(alphaOf),
+        background: [first, later].map((frame) => points.map(([x, y]) => px(frame, output.width, x, y))),
+      };
     } finally {
       host.dispose();
     }
@@ -513,6 +583,37 @@ const harness = {
       missing: r.missing,
       loads,
     };
+  },
+
+  async templateAudio(name: TemplateKey, output: OutputSettings, params: ParamValues) {
+    const { host, loaded } = await exportEngine(name, output, params);
+    host.dispose();
+    return loaded.audioCues;
+  },
+
+  async spatialMix(cue: AudioCue) {
+    const fps = 48_000;
+    const from = 0.125;
+    const length = 12_000;
+    const signal = Float32Array.from({ length: fps / 2 }, (_, index) => (index < fps / 8 ? 0.05 : 0.35) * Math.sin(2 * Math.PI * index / 120));
+    const bank = new SoundBank(async () => encodeWav([signal, signal], fps));
+    const voices = (await bank.prepare([cue])).voices;
+    const previewGraph = new OfflineAudioContext(2, length, fps);
+    scheduleCues(previewGraph, previewGraph.destination, voices, { from, startAt: 0, until: from + length / fps });
+    const preview = await previewGraph.startRendering();
+    const exported = await mixOffline([{ ...cue, at: 0, clip: { end: (cue.clip?.end ?? 1) - from, offset: from } }], length, bank);
+    const view = exported.wav ? new DataView(exported.wav.buffer, exported.wav.byteOffset + 44) : null;
+    const energy = (channel: number, start: number, end: number) => {
+      let live = 0;
+      let offline = 0;
+      const samples = preview.getChannelData(channel);
+      for (let index = start; index < end; index++) {
+        live += samples[index]! ** 2;
+        offline += ((view?.getInt16(index * 4 + channel * 2, true) ?? 0) / 32767) ** 2;
+      }
+      return { live, offline };
+    };
+    return { left: energy(0, 0, 4000), right: energy(1, 0, 4000), tail: energy(0, 6400, length).live + energy(1, 6400, length).offline };
   },
 
   /** 装载模板，返回 warnings（escape-attempts 用它报告结果） */

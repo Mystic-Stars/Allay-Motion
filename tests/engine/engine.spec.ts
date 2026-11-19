@@ -38,6 +38,32 @@ const N1 = { subframes: 1, shutterAngle: 180 };
 const STANDARD = { subframes: 8, shutterAngle: 180 };
 const BLOCK: TemplateName = 'blockWipe';
 
+test('T-ENG-COMP-1 合成 Worker：独立来源与相机、线性透明混合、先合成再模糊、乱序、关闭', async () => {
+  const result = await call('probeComposition');
+  expect(result.loaded.totalFrames).toBe(4);
+  expect(result.loaded.audioCues.map(({ at, clip }) => [at, clip?.end, clip?.offset, clip?.profile])).toEqual([
+    [0, 2 / 30, 0, 'red'], [1 / 30, 3 / 30, 2 / 30, 'blue'],
+  ]);
+  expect(result.overlap).toEqual([156, 0, 213, 191]);
+  expect(result.independent[2]).toBe(255);
+  expect(result.independent[0]).toBe(0);
+  for (const [channel, value] of result.previewPixel.entries()) {
+    const expected = channel === 3 ? result.overlap[3]! : result.overlap[channel]! * result.overlap[3]! / 255;
+    expect(Math.abs(value - expected)).toBeLessThanOrEqual(1);
+  }
+  expect(result.first.slice(0, 3)).toEqual([255, 0, 0]);
+  expect(result.afterRed.slice(0, 3)).toEqual([0, 0, 255]);
+  expect(result.transparent).toEqual([0, 0, 0, 0]);
+  expect(result.opaque).toEqual([0, 255, 0, 255]);
+  expect(result.shutter).toEqual([188, 0, 188, 255]);
+  expect(result.seek).toBeNull();
+  expect(result.invalid).toBe(true);
+  expect(result.editTextureReads).toBe(0);
+  expect(result.rejected).toBe(true);
+  expect(result.afterReject).toEqual(result.shutter);
+  expect(result.cleared).toEqual([0, 0, 0, 0]);
+});
+
 test('T-ENG-1 确定性：全部帧顺序渲染一遍、乱序渲染一遍，逐字节相同', async () => {
   const output = { width: 1280, height: 720, fps: 60 };
   const seq = await call('frameHashes', BLOCK, output, STANDARD, false);

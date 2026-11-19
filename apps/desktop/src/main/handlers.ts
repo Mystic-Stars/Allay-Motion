@@ -1,6 +1,6 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
-import { app, dialog, type BrowserWindow } from 'electron';
+import { app, dialog, shell, type BrowserWindow } from 'electron';
 import type { AppInfo, PickedFile } from '../shared/ipc-contract';
 import type { AddPackResult, ChooseGameDirResult } from '../shared/resources';
 import { IPC } from '../shared/ipc-channels';
@@ -9,6 +9,8 @@ import { UnknownJobError, type ExportService } from './export/export-service';
 import type { FileGrants } from './file-grants';
 import { IpcRejected, type createIpcRegistrar } from './ipc';
 import type { ResourceService } from './resources/service';
+import { SoundImports } from './resources/sound-imports';
+import { SoundExtensionSchema } from '../shared/sound';
 import type { SettingsStore } from './settings-store';
 import type { ThumbCache } from './thumb-cache';
 import type { ExportFileResult, StageResult } from '../shared/templates';
@@ -21,6 +23,9 @@ import type { HostCommandChannel } from './host-commands';
 import type { OpenFileQueue } from './open-files';
 import type { FolderService } from './folders';
 import type { UpdateService } from './updates/service';
+import type { MacMenuState } from '../shared/mac-menu';
+import { encodeCompositionPackage, readCompositionArchive, writeCompositionAtomic } from './templates/composition-package';
+import type { CompositionPackageResult, ReadCompositionPackageResult } from '../shared/template-authoring';
 
 const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 
@@ -42,6 +47,8 @@ export interface HandlerDeps {
   updates: UpdateService;
   /** 界面就绪（host.ready） */
   onRendererReady(): void;
+  onMacMenuState?(state: MacMenuState): void;
+  onProjectRecentsChanged?(): void;
   presets: PresetStore;
   projects: ProjectService;
   /** 测试开关：工程的打开、保存对话框不弹出，直接用这个路径（只在未打包时非空） */
@@ -67,7 +74,7 @@ async function knownJob<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function registerHandlers({ registrar, settings, grants, exports, resources, thumbs, templates, templateDev, hostCommands, openFiles, folders, updates, onRendererReady, presets, projects, projectPathForTests, testHooks, getMainWindow }: HandlerDeps): void {
+export function registerHandlers({ registrar, settings, grants, exports, resources, thumbs, templates, templateDev, hostCommands, openFiles, folders, updates, onRendererReady, onMacMenuState, onProjectRecentsChanged, presets, projects, projectPathForTests, testHooks, getMainWindow }: HandlerDeps): void {
   const { handle } = registrar;
 
   handle(IPC.app.info, (): AppInfo => ({
@@ -113,6 +120,11 @@ export function registerHandlers({ registrar, settings, grants, exports, resourc
     return new Uint8Array(await readFile(path));
   });
 
+  handle(IPC.fonts.list, async (_event, profile) => {
+    await resources.whenOpened();
+    return { resources: await resources.fontIds(profile) };
+  });
+
   // ---- resources（03-assets.md）----
   handle(IPC.resources.layers, async () => {
     await resources.whenOpened();
@@ -122,36 +134,56 @@ export function registerHandlers({ registrar, settings, grants, exports, resourc
     await resources.whenOpened();
     return resources.resourceStamp;
   });
-  handle(IPC.resources.read, (_event, path) => resources.read(path));
-  handle(IPC.resources.readTexture, (_event, id) => resources.readTexture(id));
-  handle(IPC.resources.list, (_event, prefix) => resources.list(prefix));
-  handle(IPC.resources.soundVariants, (_event, id) => resources.soundVariants(id));
-  handle(IPC.resources.soundLibrary, () => resources.soundLibrary());
-  handle(IPC.resources.soundFiles, (_event, files, fetch) => resources.soundFiles(files, fetch));
-  handle(IPC.resources.fontProviders, (_event, id) => resources.fontProviders(id));
-  handle(IPC.resources.fallbackFont, () => resources.fallbackFontTables());
+  handle(IPC.resources.read, (_event, path, profile) => resources.read(path, profile));
+  handle(IPC.resources.readTexture, (_event, id, profile) => resources.readTexture(id, profile));
+  handle(IPC.resources.list, (_event, prefix, profile) => resources.list(prefix, profile));
+  const soundImports = new SoundImports(app.getPath('userData'));
+  handle(IPC.sound.pick, async (_event, kind) => {
+    const win = getMainWindow();
+    if (!win) return null;
+    const selection = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Audio', extensions: [...SoundExtensionSchema.options] }] });
+    const path = selection.filePaths[0];
+    return !selection.canceled && path ? soundImports.add(path, kind) : null;
+  });
+  handle(IPC.sound.list, () => soundImports.list());
+  handle(IPC.sound.read, (_event, id, profile) => id.startsWith('user-audio:') ? soundImports.read(id) : resources.readSound(id, profile));
+  handle(IPC.sound.fetchNames, () => resources.fetchSoundNames());
+  handle(IPC.resources.soundVariants, (_event, id, profile) => id.startsWith('user-audio:') ? soundImports.variants(id) : resources.soundVariants(id, profile));
+  handle(IPC.resources.soundLibrary, (_event, profile) => resources.soundLibrary(profile));
+  handle(IPC.resources.soundFiles, (_event, files, fetch, profile) => resources.soundFiles(files, fetch, profile));
+  handle(IPC.resources.fontProviders, (_event, id, profile) => resources.fontProviders(id, profile));
   handle(IPC.resources.detectMinecraft, () => resources.detectMinecraft());
   handle(IPC.resources.setVanilla, (_event, patch) => resources.setVanilla(patch));
-  handle(IPC.resources.chooseGameDir, async (): Promise<ChooseGameDirResult> => {
+  handle(IPC.resources.selectProfile, (_event, id) => resources.selectProfile(id));
+  handle(IPC.resources.officialVersions, () => resources.listOfficialVersions());
+  handle(IPC.resources.instancePacks, (_event, id) => resources.instancePacks(id));
+  handle(IPC.resources.setInstancePack, (_event, id, pack, enabled) => resources.setInstancePack(id, pack, enabled));
+  handle(IPC.resources.locateProfile, async (_event, id, target) => {
+    const path = await resources.locateProfile(id, target);
+    if (!path) return false;
+    shell.showItemInFolder(path);
+    return true;
+  });
+  handle(IPC.resources.chooseGameDir, async (_event, reconnectId): Promise<ChooseGameDirResult> => {
     const win = getMainWindow();
     if (!win) return { canceled: true };
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
     const dir = result.filePaths[0];
     if (result.canceled || !dir) return { canceled: true };
-    return resources.useGameDir(dir);
+    return resources.useGameDir(dir, reconnectId);
   });
-  handle(IPC.resources.downloadVanilla, () => resources.downloadVanilla());
+  handle(IPC.resources.downloadVanilla, (_event, versionId) => resources.downloadVanilla(versionId));
   handle(IPC.resources.cancelDownload, () => resources.cancelDownload());
-  handle(IPC.resources.addPack, async (_event, kind): Promise<AddPackResult> => {
+  handle(IPC.resources.addPack, async (_event, kind, reconnectId): Promise<AddPackResult> => {
     const win = getMainWindow();
     if (!win) return { canceled: true };
     const result = await dialog.showOpenDialog(
       win,
-      kind === 'zip' ? { properties: ['openFile'], filters: [{ name: 'Resource pack', extensions: ['zip'] }] } : { properties: ['openDirectory'] },
+      kind === 'zip' ? { properties: ['openFile'], filters: [{ name: 'ZIP / MCPACK', extensions: ['zip', 'mcpack'] }] } : { properties: ['openDirectory'] },
     );
     const path = result.filePaths[0];
     if (result.canceled || !path) return { canceled: true };
-    return resources.addPackFromPath(path);
+    return resources.addPackFromPath(path, reconnectId);
   });
   // 拖放：路径由 preload 用 webUtils.getPathForFile 从真实的 File 取得（1.6 第 6 条）
   handle(IPC.resources.addDroppedPack, (_event, path) => {
@@ -201,10 +233,51 @@ export function registerHandlers({ registrar, settings, grants, exports, resourc
   handle(IPC.templates.copyBuiltin, (_event, req) => templateDev.copyBuiltin(req));
   handle(IPC.templates.writeDevFiles, (_event, id, version) => templateDev.writeDevFiles({ id, version }));
   handle(IPC.templates.openFolder, (_event, id, version) => templateDev.openFolder({ id, version }));
+  handle(IPC.templates.readSource, (_event, { id, version }) => templates.readSource(id, version));
+  handle(IPC.templates.writeSource, (_event, { id, version }, request) => templates.writeSource(id, version, request));
+  handle(IPC.templates.createBlank, (_event, name) => templates.createBlank(name));
+  handle(IPC.templates.freezeComposition, async (_event, request): Promise<CompositionPackageResult> => {
+    try {
+      const pkg = await templates.freezeComposition(request);
+      const path = await pickSavePath(getMainWindow(), 'composition.allaytpl', 'allaytpl');
+      if (!path) return { canceled: true };
+      await writeCompositionAtomic(path, encodeCompositionPackage(pkg));
+      await templates.compositionLibrary.remember(pkg);
+      return { ok: true, entry: { id: pkg.id, name: pkg.name } };
+    } catch (error) {
+      return { ok: false, error: String(error).slice(0, 1000) };
+    }
+  });
+  handle(IPC.templates.importComposition, async (): Promise<CompositionPackageResult> => {
+    const win = getMainWindow();
+    if (!win) return { canceled: true };
+    const picked = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Composition template', extensions: ['allaytpl'] }] });
+    const path = picked.filePaths[0];
+    if (picked.canceled || !path) return { canceled: true };
+    try {
+      const pkg = await readCompositionArchive(path);
+      await templates.compositionLibrary.remember(pkg);
+      return { ok: true, entry: { id: pkg.id, name: pkg.name } };
+    } catch (error) {
+      return { ok: false, error: String(error).slice(0, 1000) };
+    }
+  });
+  handle(IPC.templates.listCompositions, () => templates.compositionLibrary.list());
+  handle(IPC.templates.openComposition, async (_event, id): Promise<ReadCompositionPackageResult> => {
+    try {
+      return { ok: true, package: await templates.openComposition(id) };
+    } catch (error) {
+      return { ok: false, error: String(error).slice(0, 1000) };
+    }
+  });
 
   // ---- 主进程到界面的命令通道（H11）：界面交回结果 ----
   handle(IPC.host.commandResult, (_event, result) => hostCommands.receive(result));
   handle(IPC.host.ready, () => onRendererReady());
+  handle(IPC.host.macMenuState, (_event, state) => {
+    if (!onMacMenuState) throw new IpcRejected('native menu is unavailable');
+    onMacMenuState(state);
+  });
 
   // ---- project（1.9）----
   const pickProjectToOpen = async (): Promise<string | null> => {
@@ -223,22 +296,22 @@ export function registerHandlers({ registrar, settings, grants, exports, resourc
   };
   handle(IPC.project.open, async (): Promise<ProjectOpenResult> => {
     const path = await pickProjectToOpen();
-    return path ? projects.openPath(path) : { canceled: true };
+    return path ? projects.openPath(path).finally(onProjectRecentsChanged) : { canceled: true };
   });
   handle(IPC.project.openRequested, (_event, token): Promise<ProjectOpenResult> | ProjectOpenResult => {
     const path = openFiles.take(token, 'project');
-    return path ? projects.openPath(path) : { ok: false, error: 'missing' };
+    return path ? projects.openPath(path).finally(onProjectRecentsChanged) : { ok: false, error: 'missing' };
   });
-  handle(IPC.project.openRecent, (_event, id) => projects.openRecent(id));
+  handle(IPC.project.openRecent, (_event, id) => projects.openRecent(id).finally(onProjectRecentsChanged));
   handle(IPC.project.save, async (_event, handle, data): Promise<ProjectSaveResult> => {
     const known = handle ? projects.pathOf(handle) : null;
     if (handle && !known) throw new IpcRejected('unknown project handle');
     const path = known ?? (await pickProjectToSave(data.name));
-    return path ? projects.saveTo(path, data) : { canceled: true };
+    return path ? projects.saveTo(path, data).finally(onProjectRecentsChanged) : { canceled: true };
   });
   handle(IPC.project.saveAs, async (_event, data): Promise<ProjectSaveResult> => {
     const path = await pickProjectToSave(data.name);
-    return path ? projects.saveTo(path, data) : { canceled: true };
+    return path ? projects.saveTo(path, data).finally(onProjectRecentsChanged) : { canceled: true };
   });
   handle(IPC.project.recents, () => projects.recents());
 

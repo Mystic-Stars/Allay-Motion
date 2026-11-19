@@ -8,30 +8,25 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 import { ICON } from '../lib/icons';
 import { useEditor, type SoundLibraryItem } from './context';
 
-// SoundField（6.5）：弹层列表，库是资源栈合并后的 sounds.json 里的全部音效事件（原版层 + 资源包），
-// 规格 3.8 的常用事件置顶，其余按“命名空间 · 类别”分组；可搜索（ID、常用事件的两种语言名称）、虚拟滚动。
-// 没有任何素材层时库为空，显示引导（不提供任何自制或合成音效）。旁边是试听按钮。
+// SoundField（6.5）：音效和音乐可按两种语言的名称或 ID 搜索，常用事件置顶。
 
-const ROW = 30;
+const ROW = 42;
 const HEADER = 24;
 
 type Row = { kind: 'header'; label: string } | { kind: 'none' } | { kind: 'sound'; item: SoundLibraryItem };
 
-/** 常用事件的显示名；其余事件显示 ID 去掉 minecraft: 之后的部分 */
+/** 优先显示当前语言的名称，没有名称时保留完整 ID。 */
 export function useSoundName(): (id: string) => string {
-  const editor = useEditor();
+  const { sounds, locale, t } = useEditor();
   return useMemo(() => {
-    const common = new Set(editor.sounds.common);
-    return (id: string) => (common.has(id) ? editor.t(`sound.names.${id.replace(/[:.]/g, '_')}`, { id }) : id.startsWith('minecraft:') ? id.slice('minecraft:'.length) : id);
-  }, [editor]);
-}
-
-function category(id: string): string {
-  const colon = id.indexOf(':');
-  const ns = id.slice(0, colon);
-  const path = id.slice(colon + 1);
-  const dot = path.indexOf('.');
-  return `${ns} · ${dot < 0 ? path : path.slice(0, dot)}`;
+    const byId = new Map(sounds.library.map((item) => [item.id, item]));
+    const common = new Set(sounds.common);
+    const language = locale.startsWith('zh') ? 'zh-CN' : 'en';
+    return (id: string) => {
+      const item = byId.get(id);
+      return item?.names[language] ?? ((!item || item.source === 'vanilla' || item.source === 'definition-override' || item.source === 'file-override') && common.has(id) ? t(`sound.names.${id.replace(/[:.]/g, '_')}`, { id }) : id);
+    };
+  }, [sounds.library, sounds.common, locale, t]);
 }
 
 function StateIcon({ state, label }: { state: SoundLibraryItem['state']; label: string }) {
@@ -48,10 +43,12 @@ function SoundList({ value, onPick }: { value: string | null; onPick(id: string 
   const editor = useEditor();
   const name = useSoundName();
   const [q, setQ] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [fetchingNames, setFetchingNames] = useState(false);
   const { library, common } = editor.sounds;
   const rows = useMemo<Row[]>(() => {
-    const s = q.trim().toLowerCase();
-    const match = (item: SoundLibraryItem) => !s || item.id.toLowerCase().includes(s) || name(item.id).toLowerCase().includes(s);
+    const s = q.trim().normalize('NFKC').toLowerCase();
+    const match = (item: SoundLibraryItem) => !s || [item.id, item.names['zh-CN'], item.names.en, name(item.id)].some((label) => label?.normalize('NFKC').toLowerCase().includes(s));
     const out: Row[] = [];
     if (!s) out.push({ kind: 'none' });
     const byId = new Map(library.map((i) => [i.id, i]));
@@ -60,15 +57,12 @@ function SoundList({ value, onPick }: { value: string | null; onPick(id: string 
       out.push({ kind: 'header', label: editor.t('sound.common') });
       for (const item of pinned) out.push({ kind: 'sound', item });
     }
-    let current = '';
-    for (const item of library) {
-      if (!match(item)) continue;
-      const c = category(item.id);
-      if (c !== current) {
-        current = c;
-        out.push({ kind: 'header', label: c });
-      }
-      out.push({ kind: 'sound', item });
+    const pinnedIds = new Set(pinned.map(({ id }) => id));
+    for (const kind of ['effect', 'music'] as const) {
+      const matches = library.filter((item) => item.kind === kind && !pinnedIds.has(item.id) && match(item));
+      if (!matches.length) continue;
+      out.push({ kind: 'header', label: editor.t(`sound.kind.${kind}`) });
+      for (const item of matches) out.push({ kind: 'sound', item });
     }
     return out;
   }, [q, library, common, editor, name]);
@@ -81,12 +75,35 @@ function SoundList({ value, onPick }: { value: string | null; onPick(id: string 
   });
   const anySound = rows.some((r) => r.kind === 'sound');
   const stateLabel = (state: SoundLibraryItem['state']) => editor.t(state === 'remote' ? 'sound.remote' : 'sound.unavailable');
+  async function pickImport(kind: SoundLibraryItem['kind']) {
+    setImporting(true);
+    try {
+      const id = await editor.importSound?.(kind);
+      if (id) onPick(id);
+    } finally {
+      setImporting(false);
+    }
+  }
   return (
     <div className="flex flex-col gap-2">
       <div className="relative">
         <MagnifyingGlass size={ICON.sm} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
-        <Input autoFocus value={q} onChange={(e) => setQ(e.currentTarget.value)} placeholder={editor.t('picker.search')} aria-label={editor.t('picker.search')} className="pl-8" data-testid="sound-search" />
+        <Input autoFocus value={q} onChange={(event) => { setQ(event.currentTarget.value); scrollRef.current?.scrollTo({ top: 0 }); }} placeholder={editor.t('picker.search')} aria-label={editor.t('picker.search')} className="pl-8" data-testid="sound-search" />
       </div>
+      {editor.importSound && (
+        <div className="flex gap-1">
+          <Button size="xs" variant="secondary" disabled={importing} onClick={() => void pickImport('effect')}>{editor.t('sound.importEffect')}</Button>
+          <Button size="xs" variant="secondary" disabled={importing} onClick={() => void pickImport('music')}>{editor.t('sound.importMusic')}</Button>
+        </div>
+      )}
+      {editor.fetchSoundNames && (
+        <Button size="xs" variant="secondary" disabled={fetchingNames} onClick={async () => {
+          setFetchingNames(true);
+          try { await editor.fetchSoundNames?.(); } finally { setFetchingNames(false); }
+        }}>
+          {editor.t('sound.downloadNames')}
+        </Button>
+      )}
       {library.length === 0 && (
         <div className="flex items-center justify-between gap-2 rounded-md bg-control px-2.5 py-1.5 text-xs text-fg-muted" data-testid="sound-library-empty">
           <span>{editor.t(editor.sounds.loading ? 'sound.loading' : 'sound.noLibrary')}</span>
@@ -126,13 +143,21 @@ function SoundList({ value, onPick }: { value: string | null; onPick(id: string 
                     data-testid={`sound-${row.item.id}`}
                     data-state={row.item.state}
                     className={cn(
-                      'flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-control',
+                      'flex h-10 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-control',
                       value === row.item.id && 'bg-primary-soft',
                       row.item.state === 'missing' && 'text-fg-subtle',
                     )}
                     onClick={() => onPick(row.item.id)}
                   >
-                    <span className="min-w-0 flex-1 truncate">{name(row.item.id)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{name(row.item.id)}</span>
+                      <span className="block truncate text-xs text-fg-muted">
+                        {editor.t(`sound.source.${row.item.source}`)}
+                        {row.item.fileOverride && row.item.source !== 'file-override' && ` · ${editor.t('sound.source.file-override')}`}
+                        {row.item.names.chinese === 'missing' && ` · ${editor.t('sound.missingChinese')}`}
+                        {row.item.variantCount > 1 && ` · ${editor.t('sound.variants', { count: row.item.variantCount })}`}
+                      </span>
+                    </span>
                     <StateIcon state={row.item.state} label={stateLabel(row.item.state)} />
                   </button>
                 )}

@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "name": { "zh-CN": "进度提示", "en": "Advancement toast" },
   "description": {
-    "zh-CN": "屏幕一角滑入一个提示框：左边一个物品图标，右边两行字。停留后滑出。",
-    "en": "A toast slides into a corner with an item icon and two lines of text, holds, then slides out."
+    "zh-CN": "带物品图标的滑入提示框，可选通用、Java 进度与旧版成就、基岩成就风格。",
+    "en": "A sliding item toast with generic, Java advancement and legacy achievement, and Bedrock achievement styles."
   },
   "license": "MIT",
   "category": "overlay",
@@ -17,12 +17,42 @@
     { "key": "sound", "label": { "zh-CN": "音效", "en": "Sound" }, "collapsed": true }
   ],
   "params": [
-    { "key": "icon", "type": "item", "label": { "zh-CN": "图标", "en": "Icon" }, "group": "content", "default": "minecraft:diamond" },
+    {
+      "key": "toastStyle", "type": "enum", "group": "content", "default": "generic",
+      "label": { "zh-CN": "提示样式", "en": "Toast style" },
+      "options": [
+        { "value": "generic", "label": { "zh-CN": "通用（原模板）", "en": "Generic (original template)" } },
+        { "value": "javaAchievement", "label": { "zh-CN": "Java Beta 1.5–1.11.2 · 成就", "en": "Java Beta 1.5–1.11.2 · Achievement" } },
+        { "value": "javaAdvancement", "label": { "zh-CN": "Java 经典进度（1.12 / 1.21.1）", "en": "Classic Java advancement (1.12 / 1.21.1)" } },
+        { "value": "javaAdvancement263", "label": { "zh-CN": "Java 26.3 · 进度", "en": "Java 26.3 · Advancement" } },
+        { "value": "bedrockAchievement", "label": { "zh-CN": "基岩 26.60 样例 · 无 Xbox 系统通知设备的游戏内成就（待采样）", "en": "Bedrock 26.60 sample · In-game achievement (devices without Xbox notifications; capture pending)" } }
+      ]
+    },
+    { "key": "bedrockAchievementIcon", "type": "texture", "allowFile": true, "default": "", "group": "content", "label": { "zh-CN": "基岩成就图标 PNG", "en": "Bedrock achievement icon PNG" }, "visibleWhen": { "key": "toastStyle", "equals": "bedrockAchievement" } },
+    {
+      "key": "bedrockHeadingMode", "type": "enum", "group": "content", "default": "compatible",
+      "label": { "zh-CN": "标题来源", "en": "Heading source" },
+      "visibleWhen": { "key": "toastStyle", "equals": "bedrockAchievement" },
+      "options": [
+        { "value": "compatible", "label": { "zh-CN": "预设（保留旧标题）", "en": "Preset (keep legacy heading)" } },
+        { "value": "preset", "label": { "zh-CN": "预设", "en": "Preset" } },
+        { "value": "custom", "label": { "zh-CN": "自定义", "en": "Custom" } }
+      ]
+    },
+    {
+      "key": "bedrockHeading", "type": "text", "group": "content", "default": "", "maxLength": 24,
+      "label": { "zh-CN": "标题文字", "en": "Heading text" },
+      "hint": { "zh-CN": "按输入显示；留空则不显示标题。", "en": "Shown as entered. Leave blank to omit the heading." },
+      "visibleWhen": { "all": [{ "key": "toastStyle", "equals": "bedrockAchievement" }, { "key": "bedrockHeadingMode", "equals": "custom" }] },
+      "legacyText": [{ "key": "header", "when": { "key": "toastStyle", "in": ["bedrockAchievement"] } }]
+    },
+    { "key": "icon", "type": "item", "label": { "zh-CN": "图标", "en": "Icon" }, "group": "content", "default": "minecraft:diamond", "visibleWhen": { "key": "toastStyle", "not": "bedrockAchievement" } },
     {
       "key": "frame",
       "type": "enum",
       "label": { "zh-CN": "进度类型", "en": "Frame" },
-      "hint": { "zh-CN": "决定标题行的默认颜色", "en": "Sets the default header color" },
+      "hint": { "zh-CN": "决定默认颜色；Java 挑战还使用挑战音效。仅在跟随类型时决定标题文字。", "en": "Sets the default color and selects the Java challenge sound. Sets the heading text only when following the type." },
+      "visibleWhen": { "key": "toastStyle", "in": ["generic", "javaAdvancement", "javaAdvancement263"] },
       "group": "content",
       "default": "task",
       "options": [
@@ -31,22 +61,93 @@
         { "value": "challenge", "label": { "zh-CN": "挑战", "en": "Challenge" } }
       ]
     },
-    { "key": "header", "type": "text", "label": { "zh-CN": "标题行", "en": "Header" }, "group": "content", "default": { "zh-CN": "进度已达成！", "en": "Advancement Made!" }, "maxLength": 24 },
-    { "key": "title", "type": "text", "label": { "zh-CN": "名称", "en": "Title" }, "group": "content", "default": { "zh-CN": "钻石！", "en": "Diamonds!" }, "maxLength": 28 },
+    {
+      "key": "javaHeadingMode", "type": "enum", "group": "content", "default": "follow",
+      "label": { "zh-CN": "标题行", "en": "Heading" },
+      "visibleWhen": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+      "legacyDefault": {
+        "value": "custom", "when": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+        "nonBlankText": ["javaHeader", "header"],
+        "presetText": { "header": ["Advancement Made!", "进度已达成！"] }
+      },
+      "options": [
+        { "value": "follow", "label": { "zh-CN": "跟随类型", "en": "Follow type" } },
+        { "value": "custom", "label": { "zh-CN": "自定义", "en": "Custom" } }
+      ]
+    },
+    {
+      "key": "toastLanguage", "type": "enum", "group": "content", "default": "auto",
+      "visibleWhen": { "any": [
+        { "all": [{ "key": "toastStyle", "equals": "bedrockAchievement" }, { "key": "bedrockHeadingMode", "in": ["compatible", "preset"] }] },
+        { "all": [
+          { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+          { "key": "javaHeadingMode", "equals": "follow" }
+        ] }
+      ] },
+      "label": { "zh-CN": "预设标题语言", "en": "Preset header language" },
+      "options": [
+        { "value": "auto", "label": { "zh-CN": "跟随应用语言", "en": "Follow app language" } },
+        { "value": "zh-CN", "label": { "zh-CN": "简体中文", "en": "Simplified Chinese" } },
+        { "value": "en", "label": { "zh-CN": "英语", "en": "English" } }
+      ]
+    },
+    {
+      "key": "header", "type": "text", "label": { "zh-CN": "标题行", "en": "Header" }, "group": "content",
+      "default": { "zh-CN": "进度已达成！", "en": "Advancement Made!" }, "maxLength": 24,
+      "visibleWhen": { "key": "toastStyle", "equals": "generic" }
+    },
+    {
+      "key": "javaHeader", "type": "text", "label": { "zh-CN": "标题文字", "en": "Heading text" }, "group": "content",
+      "default": "", "maxLength": 24,
+      "visibleWhen": { "all": [
+        { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+        { "key": "javaHeadingMode", "equals": "custom" }
+      ] },
+      "legacyText": [{ "key": "header", "when": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] } }],
+      "hint": { "zh-CN": "按输入显示；留空则不显示标题行。", "en": "Shown as entered. Leave blank to omit the heading." }
+    },
+    {
+      "key": "title", "type": "text", "label": { "zh-CN": "名称", "en": "Title" }, "group": "content",
+      "default": { "zh-CN": "钻石！", "en": "Diamonds!" }, "maxLength": 28,
+      "visibleWhen": { "key": "toastStyle", "in": ["generic", "bedrockAchievement"] }
+    },
+    {
+      "key": "javaTitle", "type": "text", "label": { "zh-CN": "名称", "en": "Title" }, "group": "content",
+      "default": { "zh-CN": "钻石！", "en": "Diamonds!" }, "maxLength": 64, "multiline": true,
+      "visibleWhen": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+      "legacyText": [
+        { "key": "javaLongTitle", "skipEmpty": true, "when": { "key": "toastStyle", "in": ["javaAdvancement", "javaAdvancement263"] } },
+        { "key": "title", "when": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] } }
+      ],
+      "hint": { "zh-CN": "Java 进度按 125 GUI 像素换行，超出面板容量的部分以省略号标记。", "en": "Java advancements wrap at 125 GUI pixels and use an ellipsis when the panel cannot show the full title." }
+    },
+    {
+      "key": "bedrockColorMode", "type": "enum", "group": "content", "default": "compatible",
+      "label": { "zh-CN": "标题颜色来源", "en": "Heading color source" },
+      "visibleWhen": { "key": "toastStyle", "equals": "bedrockAchievement" },
+      "options": [
+        { "value": "compatible", "label": { "zh-CN": "默认白色（保留旧配色）", "en": "White by default (keep legacy color)" } },
+        { "value": "custom", "label": { "zh-CN": "自选颜色", "en": "Choose color" } }
+      ]
+    },
     {
       "key": "headerColor",
       "type": "color",
       "label": { "zh-CN": "标题行颜色", "en": "Header color" },
-      "hint": { "zh-CN": "保持默认值时按进度类型取色（挑战为粉色）", "en": "At the default value the color follows the frame (pink for challenges)" },
+      "hint": { "zh-CN": "通用和 Java 样式的默认颜色跟随进度类型（挑战为粉色）；基岩自选颜色按所选值显示。", "en": "In Generic and Java styles, the default follows the frame (pink for challenges). Bedrock uses the chosen color as is." },
       "group": "content",
       "default": "#FFFF55",
-      "palette": "chat"
+      "palette": "chat",
+      "visibleWhen": { "any": [{ "key": "toastStyle", "not": "bedrockAchievement" }, { "key": "bedrockColorMode", "equals": "custom" }] }
     },
+    { "key": "headerFont", "type": "font", "label": { "zh-CN": "标题行字体", "en": "Header font" }, "group": "content", "default": "minecraft:default" },
+    { "key": "titleFont", "type": "font", "label": { "zh-CN": "名称字体", "en": "Name font" }, "group": "content", "default": "minecraft:default" },
     { "key": "titleColor", "type": "color", "label": { "zh-CN": "名称颜色", "en": "Title color" }, "group": "content", "default": "#FFFFFF", "palette": "chat" },
     {
       "key": "anchor",
       "type": "enum",
       "label": { "zh-CN": "位置", "en": "Anchor" },
+      "visibleWhen": { "key": "toastStyle", "equals": "generic" },
       "group": "layout",
       "default": "topRight",
       "options": [
@@ -56,13 +157,60 @@
         { "value": "bottomLeft", "label": { "zh-CN": "左下", "en": "Bottom left" } }
       ]
     },
-    { "key": "guiScale", "type": "integer", "label": { "zh-CN": "界面缩放", "en": "GUI scale" }, "hint": { "zh-CN": "一个界面像素对应的设计单位", "en": "Design units per GUI pixel" }, "group": "layout", "default": 4, "min": 2, "max": 10, "ui": "slider" },
+    {
+      "key": "guiScaleMode", "type": "enum", "group": "layout", "default": "manual",
+      "visibleWhen": { "key": "toastStyle", "in": ["javaAdvancement", "javaAdvancement263"] },
+      "label": { "zh-CN": "界面缩放模式", "en": "GUI scale mode" },
+      "hint": { "zh-CN": "原版自动按工程输出尺寸计算普通 Java GUI 缩放，不读取游戏设置，也不模拟强制 Unicode 或游戏内指定档位。", "en": "Vanilla auto uses the project output size and normal Java GUI scaling. It does not read game settings or simulate Force Unicode or a selected in-game scale." },
+      "options": [
+        { "value": "vanillaAuto", "label": { "zh-CN": "原版自动", "en": "Vanilla auto" } },
+        { "value": "manual", "label": { "zh-CN": "手动（设计单位）", "en": "Manual (design units)" } }
+      ]
+    },
+    { "key": "guiScale", "type": "integer", "label": { "zh-CN": "界面缩放", "en": "GUI scale" }, "hint": { "zh-CN": "一个界面像素对应的设计单位，不等于导出像素。", "en": "Design units per GUI pixel, not export pixels." }, "group": "layout", "default": 4, "min": 2, "max": 10, "ui": "slider",
+      "visibleWhen": { "any": [{ "all": [{ "key": "toastStyle", "not": "javaAdvancement" }, { "key": "toastStyle", "not": "javaAdvancement263" }] }, { "key": "guiScaleMode", "equals": "manual" }] }
+    },
     { "key": "margin", "type": "number", "label": { "zh-CN": "边距", "en": "Margin" }, "hint": { "zh-CN": "离屏幕边缘的距离", "en": "Distance from the screen edges" }, "group": "layout", "default": 0, "min": 0, "max": 120, "step": 1 },
+    {
+      "key": "javaTiming", "type": "enum", "group": "timing", "default": "auto",
+      "visibleWhen": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+      "label": { "zh-CN": "Java 节拍", "en": "Java timing" },
+      "options": [
+        { "value": "auto", "label": { "zh-CN": "自动（保留已修改时长）", "en": "Auto (keep edited durations)" } },
+        { "value": "vanilla", "label": { "zh-CN": "仅原版时长", "en": "Vanilla durations only" } },
+        { "value": "custom", "label": { "zh-CN": "总是使用下方时长", "en": "Always use durations below" } }
+      ]
+    },
     { "key": "inDuration", "type": "duration", "label": { "zh-CN": "滑入", "en": "In" }, "group": "timing", "default": 0.25, "min": 0.1, "max": 1 },
     { "key": "hold", "type": "duration", "label": { "zh-CN": "停留", "en": "Hold" }, "group": "timing", "default": 2.5, "min": 0.5, "max": 10 },
     { "key": "outDuration", "type": "duration", "label": { "zh-CN": "滑出", "en": "Out" }, "group": "timing", "default": 0.25, "min": 0.1, "max": 1 },
-    { "key": "sound", "type": "sound", "label": { "zh-CN": "音效", "en": "Sound" }, "hint": { "zh-CN": "在开头播放", "en": "Plays at the start" }, "group": "sound", "default": "minecraft:ui.toast.in" },
-    { "key": "volume", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "group": "sound", "default": 0.8, "min": 0, "max": 1, "step": 0.01, "ui": "slider" }
+    {
+      "key": "javaSound", "type": "enum", "group": "sound", "default": "auto",
+      "visibleWhen": { "key": "toastStyle", "in": ["javaAchievement", "javaAdvancement", "javaAdvancement263"] },
+      "label": { "zh-CN": "Java 音效模式", "en": "Java sound mode" },
+      "options": [
+        { "value": "auto", "label": { "zh-CN": "自动（保留自选音效）", "en": "Auto (keep selected override)" } },
+        { "value": "vanilla", "label": { "zh-CN": "仅原版音效", "en": "Vanilla sounds only" } },
+        { "value": "custom", "label": { "zh-CN": "仅使用下方音效", "en": "Use only the sound below" } }
+      ]
+    },
+    {
+      "key": "bedrockSoundMode", "type": "enum", "group": "sound", "default": "compatible",
+      "label": { "zh-CN": "音效来源", "en": "Sound source" },
+      "visibleWhen": { "key": "toastStyle", "equals": "bedrockAchievement" },
+      "options": [
+        { "value": "compatible", "label": { "zh-CN": "默认静音（保留旧音效）", "en": "Silent by default (keep legacy sound)" } },
+        { "value": "custom", "label": { "zh-CN": "自选音效", "en": "Choose sound" } }
+      ]
+    },
+    { "key": "sound", "type": "sound", "label": { "zh-CN": "音效", "en": "Sound" }, "hint": { "zh-CN": "在开头播放；可选无音效。", "en": "Plays at the start. You can also select no sound." }, "group": "sound", "default": "minecraft:ui.toast.in", "visibleWhen": { "any": [{ "key": "toastStyle", "not": "bedrockAchievement" }, { "key": "bedrockSoundMode", "equals": "custom" }] } },
+    { "key": "volume", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "group": "sound", "default": 0.8, "min": 0, "max": 1, "step": 0.01, "ui": "slider",
+      "visibleWhen": { "any": [
+        { "key": "toastStyle", "not": "bedrockAchievement" },
+        { "all": [{ "key": "bedrockSoundMode", "equals": "custom" }, { "key": "sound", "not": null }] },
+        { "all": [{ "key": "bedrockSoundMode", "equals": "compatible" }, { "key": "sound", "not": null }, { "key": "sound", "not": "minecraft:ui.toast.in" }] }
+      ] }
+    }
   ],
   "timeline": {
     "segments": [

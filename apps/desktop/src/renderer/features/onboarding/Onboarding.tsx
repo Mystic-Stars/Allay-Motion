@@ -7,10 +7,11 @@ import { ArrowLeft, ArrowRight, Check, CheckCircle, Clock, CloudArrowDown, Folde
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { FoldersInfo, FolderInfo, FolderKind } from '../../../shared/folders';
+import { titlebarInsets } from '../../app/titlebarChrome';
 import { resolveLanguage, systemLocale } from '../../i18n';
 import { useResourceStore } from '../../stores/resourceStore';
 import { useUiStore } from '../../stores/uiStore';
-import { chooseGameDir, downloadVanilla, setVanilla } from '../resources/actions';
+import { chooseGameDir, downloadVanilla, selectInstalledVersion } from '../resources/actions';
 import { DownloadProgress } from '../resources/DownloadProgress';
 import { LanguageChoice, MotionChoice, ThemeChoice } from '../settings/choices';
 import { FolderRow } from '../settings/pages';
@@ -35,14 +36,14 @@ function Stepper({ step, visited, go, summaries }: { step: OnboardingStep; visit
   const { t } = useTranslation();
   const current = ONBOARDING_STEPS.indexOf(step);
   return (
-    <ol className="flex items-center gap-2" aria-label={t('onboarding.stepsLabel')} data-testid="onboarding-stepper">
+    <ol className="flex flex-wrap items-center gap-1.5" aria-label={t('onboarding.stepsLabel')} data-testid="onboarding-stepper">
       {ONBOARDING_STEPS.map((s, i) => {
         const active = i === current;
         const reachable = i <= visited;
         const done = i < current || (i <= visited && i !== current && s !== 'done');
         return (
-          <li key={s} className="flex min-w-0 items-center gap-2">
-            {i > 0 && <span aria-hidden="true" className={cn('h-px w-6 shrink-0 transition-colors duration-(--dur-2) xl:w-10', i <= visited ? 'bg-primary' : 'bg-divider')} />}
+          <li key={s} className="flex items-center gap-1.5">
+            {i > 0 && <span aria-hidden="true" className={cn('h-px w-2 shrink-0 transition-colors duration-(--dur-2) xl:w-6 2xl:w-10', i <= visited ? 'bg-primary' : 'bg-divider')} />}
             <button
               type="button"
               disabled={!reachable}
@@ -51,7 +52,7 @@ function Stepper({ step, visited, go, summaries }: { step: OnboardingStep; visit
               data-testid={`onboarding-rail-${s}`}
               onClick={() => go(s)}
               className={cn(
-                'flex h-8 min-w-0 items-center gap-2 rounded-full pr-3 pl-1 text-left transition-colors duration-(--dur-2) outline-none',
+                'flex h-8 items-center gap-1.5 rounded-full pr-2 pl-1 text-left transition-colors duration-(--dur-2) outline-none',
                 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--ring)',
                 active ? 'bg-control-hi' : reachable ? 'hover:bg-control' : 'cursor-default',
               )}
@@ -64,7 +65,7 @@ function Stepper({ step, visited, go, summaries }: { step: OnboardingStep; visit
               >
                 {done && !active ? <Check size={12} weight="bold" aria-hidden="true" /> : i + 1}
               </span>
-              <span className={cn('truncate text-xs', active ? 'font-medium text-foreground' : reachable ? 'text-fg-muted' : 'text-fg-subtle')}>{t(`onboarding.steps.${s}.name`)}</span>
+              <span className={cn('text-xs whitespace-nowrap', active ? 'font-medium text-foreground' : reachable ? 'text-fg-muted' : 'text-fg-subtle')}>{t(`onboarding.steps.${s}.name`)}</span>
             </button>
           </li>
         );
@@ -107,7 +108,8 @@ function AssetsStep({ choice, setChoice }: { choice: AssetChoice | null; setChoi
   const state = useResourceStore((s) => s.state);
   if (!state) return null;
   const { vanilla, download } = state;
-  const active = vanilla.active ? (vanilla.active === 'local' ? vanilla.local?.versionId : vanilla.cached?.versionId) : null;
+  const active = state.library?.profiles.find((profile) => profile.id === state.library?.activeProfileId)?.versionId
+    ?? (vanilla.active === 'local' ? vanilla.local?.versionId : vanilla.active === 'cached' ? vanilla.cached?.versionId : null);
   const showProgress = download.status !== 'idle';
   return (
     <div className="-m-1 flex flex-col gap-3 p-1" role="radiogroup" aria-label={t('onboarding.steps.assets.name')}>
@@ -133,7 +135,7 @@ function AssetsStep({ choice, setChoice }: { choice: AssetChoice | null; setChoi
               {t('resources.download.note')}
             </p>
             <p className="text-xs text-fg-subtle">{t('onboarding.assets.download.consent')}</p>
-            <Button variant="secondary" className="self-start" data-testid="vanilla-download" onClick={downloadVanilla}>
+            <Button variant="secondary" className="self-start" data-testid="vanilla-download" onClick={() => downloadVanilla()}>
               <CloudArrowDown size={ICON.sm} />
               {t('onboarding.assets.download.start')}
             </Button>
@@ -152,7 +154,7 @@ function AssetsStep({ choice, setChoice }: { choice: AssetChoice | null; setChoi
           vanilla.active === 'local' ? (
             <p className="text-xs text-fg-muted">{t('onboarding.assets.local.using')}</p>
           ) : (
-            <Button variant="secondary" className="self-start" data-testid="vanilla-use-local" onClick={() => void setVanilla({ consent: true, enabled: true })}>
+            <Button variant="secondary" className="self-start" data-testid="vanilla-use-local" onClick={() => void selectInstalledVersion()}>
               <GameController size={ICON.sm} />
               {t('resources.useLocal', { version: vanilla.local.versionId })}
             </Button>
@@ -368,7 +370,8 @@ export function Onboarding() {
 
   const lang = resolveLanguage(settings.language, systemLocale());
   const vanilla = resources?.vanilla;
-  const activeVersion = vanilla?.active === 'local' ? vanilla.local?.versionId : vanilla?.active === 'cached' ? vanilla.cached?.versionId : null;
+  const activeVersion = resources?.library?.profiles.find((profile) => profile.id === resources.library?.activeProfileId)?.versionId
+    ?? (vanilla?.active === 'local' ? vanilla.local?.versionId : vanilla?.active === 'cached' ? vanilla.cached?.versionId : null);
   const downloading = resources?.download.status === 'running';
   const folderSummary = (f: FolderInfo | undefined) => (f?.path && f.state === 'ok' ? f.path : t(`onboarding.folderDefault.${f?.kind ?? 'project'}`));
   const summaries: Record<OnboardingStep, string> = {
@@ -395,8 +398,7 @@ export function Onboarding() {
       data-step={step}
       className="fixed inset-0 z-[60] flex flex-col bg-background text-foreground"
     >
-      {/* 顶栏：和主界面同高，坐在底色上；空白处可以拖动窗口，右侧给系统的窗口按钮留位置 */}
-      <header className="app-drag flex h-11 shrink-0 items-center gap-2 pr-[150px] pl-3.5">
+      <header className="app-drag flex h-11 shrink-0 items-center gap-2 pr-[150px] pl-3.5" style={titlebarInsets(true)}>
         <AllayHead size={22} label={t('brand.name')} />
         <span className="text-[13px] font-semibold whitespace-nowrap">{t('brand.wordmark')}</span>
         <span className="ml-3 text-xs text-fg-subtle">{t('onboarding.eyebrow')}</span>

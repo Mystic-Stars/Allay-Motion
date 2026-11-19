@@ -61,12 +61,14 @@ interface TemplateManifest {
 所有类型共有的字段：
 
 ```ts
+type VisibilityClause = { key: string; equals?: ParamValue; in?: ParamValue[]; not?: ParamValue };
+type VisibilityGroup = { all: VisibilityClause[] };
 interface ParamBase {
   key: string;                       // 模板内唯一，^[a-z][a-zA-Z0-9]*$
   label: LocalizedString;
   hint?: LocalizedString;            // 鼠标悬停时的说明
   group?: string;
-  visibleWhen?: { key: string; equals?: ParamValue; in?: ParamValue[]; not?: ParamValue };
+  visibleWhen?: VisibilityClause | VisibilityGroup | { any: (VisibilityClause | VisibilityGroup)[] };
 }
 ```
 
@@ -94,7 +96,8 @@ interface ParamBase {
 
 - 参数值校验：类型不对的回到默认值，越界的钳制，多余的键丢弃。校验函数是 `template-sdk` 的公开导出，引擎和界面共用。
 - `text` 的 `default` 是多语言时，新建工程按界面语言取一次，之后值就是普通字符串。
-- `visibleWhen` 只做界面显隐，不影响值。
+- `visibleWhen` 只做界面显隐，不影响值；`all` 要求每项成立，`any` 要求至少一项成立。隐藏参数仍会保存。
+- `enum.legacyDefault` 可在旧数据缺少该枚举键时，按 `when` 和 `nonBlankText` 推断 `value`。`nonBlankText` 按顺序检查第一个存在的字符串，非空白才启用迁移；显式枚举值优先。
 - 模板有 `seed` 参数时，`ctx.random` 以它为种子。
 
 ## 4.5 运行时契约
@@ -156,6 +159,7 @@ export interface ItemHandle { single(): THREE.Object3D }   // 高度为 1，厚�
 
 export interface TextOptions {
   text: string; size: number;                  // size 是一个字体像素对应多少设计单位
+  font?: string;                              // 字体参数值；省略时用资源栈的 minecraft:default
   color?: string; shadow?: boolean; align?: 'left' | 'center' | 'right'; maxWidth?: number;
 }
 export interface TextObject { object: THREE.Object3D; width: number; height: number; setOpacity(a: number): void }
@@ -252,15 +256,25 @@ export default {
 ```
 packages/templates/<name>/
   manifest.json
-  src/index.ts        只允许从 @allay/template-sdk 做类型导入，以及导入本目录内的文件
+  src/index.ts        只允许从 @allay/template-sdk 做类型导入；相对导入限本模板目录内
   assets/
 ```
 
-- `scripts/build-templates.ts` 用 esbuild 把每个模板打成单文件 ESM（不留任何 import），连同 manifest 和 assets 打成 `.allaytpl`，输出到 `resources/templates/`。
+- `scripts/build-templates.ts` 扫描有 manifest 的模板目录（不要求 pnpm 子包），ID 为 `allay.builtin.<目录名>`。esbuild 把入口及使用的帮助函数打成单文件 ESM（不留任何 import），连同 manifest 和 assets 打成 `.allaytpl`，输出到 `resources/templates/`。复制为可编辑模板时无须另外复制帮助库。
 - 应用启动时把 `resources/templates/` 当作只读的模板来源。内置模板走和用户模板相同的装载路径，只跳过 4.8 的第 1、3 步（体积和导入检查已经在构建时保证）。
 - 用 lint 规则禁止内置模板导入 `three` 的运行时或引擎内部模块。
 
-## 4.10 六个内置模板
+### 浏览、搜索和复制内置模板
+
+**素材来源**：桌面按文件从启用的覆盖包、已授权的版本、内置目录依次读取。合成片段指定了档案，就用该档案；未指定才继承工程默认档案，再回到应用的激活栈。图库展示的是新建效果，跟随工程默认档案，而不是已经选中的片段覆写。预览、导出和可编辑脚本副本使用同样的规则。
+
+离线且缺图不会安装或下载素材。`ctx.resources.optionalTexture(id)` 只返回实际可读的贴图；有同类备选时应依次尝试。全部缺失后再调用 `texture(目录贴图 ID)`（或 `block`、`item`）取原创示意；界面标作「缺少素材／原创占位」。占位不是游戏贴图，不计为启用的资源层。未知 ID 仍为缺图错误棋盘。
+
+内置库共 10 款：「全部」的默认首页仍展示原有六款；翻页可见新准入的「熔炉：一块粗铁」和「单箱开合」。另两款工作台模板「玩家动作与镜头」与「素材对象」可在「叠加」或通过搜索找到。百款作品集供用户单独导入，不计入内置清单。
+
+点模板库的放大镜或按 `Ctrl+F`，输入中文名、英文关键词或标签。搜索覆盖当前分类的所有页；要跨类别查找，先选「全部」。想修改脚本时，选中内置模板，按 `Ctrl+K` 执行「复制当前内置模板来修改」。副本出现在「我的」；执行「打开模板文件夹」即可编辑副本的 `template.js`，不会改动原模板。
+
+## 4.10 原有六个内置模板
 
 所有时长参数的类型都是 `duration`。未特别说明的转场类模板：`duration = inDuration + hold + outDuration`，`cutTime = inDuration + hold / 2`。六个模板都在 manifest 里把 `inDuration`、`hold`、`outDuration` 声明为 `timeline.segments`。
 
@@ -415,6 +429,15 @@ packages/templates/<name>/
 | `inDuration` / `hold` / `outDuration` | duration | 0.25 / 2.5 / 0.25 | 0.1–1 / 0.5–10 / 0.1–1 |
 | `sound` | sound | `minecraft:ui.toast.in` | — |
 | `volume` | number | 0.8 | 0–1 |
+
+### 新建加载界面和进度提示时如何选样式
+
+先在资源版本库选要用的资源，再从模板库点「加载界面」或「进度提示」，或在工作台添加新片段。工作台新片段跟随工程资源档案；工程没指定时才用当前主资源。模板库的封面和悬停预览展示新建效果，不代表已打开的片段会改样式。
+
+- Java 1.21.1 的世界载入默认用全景和百分比，1.21.9–1.21.11 默认用进度条；进度提示用 Java 进度样式。26.3 的专用样式只在当前安装的模板提供时启用。
+- 基岩 1.21.0 资源来源使用世界载入和游戏内成就的近似样式；资源包版本不是游戏设备或通知平台的检测结果，不模拟系统通知。
+- 没有可用的版本来源时，使用 Java 全景加载和进度样式作为参考，不表示检测到了 Java。已知版本没有对应样式时保留「通用（原模板）」。都可以在参数面板手动选择。
+- 新建 Java 进度提示的参考计时为滑入、滑出各 0.6 秒，停留 5 秒；可在时间参数里修改。切换资源只影响之后的新建默认值和库预览，不会更新已选样式或时长。旧工程无样式字段、旧模板包及旧预设（包括空预设）仍按原模板值打开。
 
 ## 4.11 验收测试
 

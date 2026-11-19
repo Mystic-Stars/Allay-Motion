@@ -30,31 +30,35 @@ const COVER_W = 320;
 const COVER_H = 180;
 
 /** 某个内置模板的封面（与模板一节共用封面服务；那边已经排了队，这里只是订阅） */
-function useCover(id: string): Cover | null {
+function useCover(id: string, anchor: React.RefObject<HTMLDivElement | null>): Cover | null {
   const [cover, setCover] = useState<Cover | null>(null);
   useEffect(() => {
     const entry = builtinEntries().find((e) => e.id === id);
-    if (!entry) return;
+    if (!entry || !anchor.current) return;
     let off: (() => void) | null = null;
-    let alive = true;
-    let timer = 0;
-    const start = async () => {
+    let release: (() => void) | undefined;
+    let generation = 0;
+    const stop = () => { generation++; off?.(); off = null; release?.(); release = undefined; setCover(null); };
+    const start = async (ticket: number) => {
       const rt = await import('../engine/runtime');
       await rt.ensureRuntime();
-      if (!alive || !rt.hasWebgl2()) return;
+      if (generation !== ticket || !rt.hasWebgl2()) return;
       const key = rt.coverKey(entry.id, entry.version);
       const pick = (s: { covers: Record<string, Cover | null> }) => setCover(s.covers[key] ?? null);
       pick(rt.useCoverStore.getState());
       off = rt.useCoverStore.subscribe(pick);
-      rt.covers.ensure([entry]);
+      release = rt.covers.animate(entry);
     };
-    timer = window.setTimeout(() => void start(), 1500);
+    const observer = new IntersectionObserver(([result]) => {
+      stop();
+      if (result?.isIntersecting) void start(generation);
+    });
+    observer.observe(anchor.current);
     return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      off?.();
+      observer.disconnect();
+      stop();
     };
-  }, [id]);
+  }, [id, anchor]);
   return cover;
 }
 
@@ -123,7 +127,8 @@ function AlphaDemo() {
 
 function FramesDemo() {
   const { t } = useTranslation();
-  const cover = useCover(DEMO_TEMPLATE);
+  const anchor = useRef<HTMLDivElement>(null);
+  const cover = useCover(DEMO_TEMPLATE, anchor);
   const N = 5;
   const strips = useRef<(HTMLCanvasElement | null)[]>([]);
   const [hot, setHot] = useState(0);
@@ -151,7 +156,7 @@ function FramesDemo() {
   }, [reducedMotion]);
   const frameNo = cover ? Math.round((hot + 0.5) * (cover.frames / N)) : hot;
   return (
-    <div className="mt-auto space-y-2 pt-6" aria-hidden="true">
+    <div ref={anchor} className="mt-auto space-y-2 pt-6" aria-hidden="true">
       {/* 大号的帧号：两行同时停在这一帧 */}
       <div className="mb-5 flex items-end justify-between gap-4">
         <span className="t-tab text-[clamp(56px,6vw,92px)] leading-none font-medium tracking-[-0.06em] text-foreground">

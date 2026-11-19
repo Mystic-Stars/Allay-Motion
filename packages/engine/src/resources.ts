@@ -2,22 +2,21 @@
 // 缓存按 resourceStamp 分代：stamp 变了就整个清空。动画贴图（.mcmeta）在每个子帧按 t 更新 UV（2.8）。
 import { animationFrameAt, frameRect, layoutAnimation, parseAnimationMeta, parseGuiNineSlice, type AnimationLayout, type NineSlice } from '@allay/assets';
 import {
-  BitmapFontPayloadSchema,
   DEFAULT_FONT_ID,
-  FALLBACK_FONT_ID,
   FontPayloadSchema,
+  normalizeRequestedFont,
   SoundMetaPayloadSchema,
   TexturePayloadSchema,
   type SoundMetaVariant,
-  type BitmapFontPayload,
   type FontPayload,
   type ResourceKind,
   type ResourcePayload,
 } from '@allay/template-sdk';
 import * as THREE from 'three';
+import { catalogPlaceholder } from './catalog-placeholder';
 
 export type ResolveResource = (kind: ResourceKind, id: string) => Promise<ResourcePayload | null>;
-export type Warn = (message: string) => void;
+export type Warn = (message: string, code?: 'catalog-placeholder') => void;
 
 /** 贴图上挂的 CPU 侧信息（物品挤出、文字、九宫格要用） */
 export interface TextureInfo {
@@ -80,27 +79,25 @@ function showFrame(tex: THREE.Texture, info: TextureInfo, index: number): void {
   tex.offset.set(r.x / info.width, 1 - (r.y + r.height) / info.height);
 }
 
-export interface LoadedFonts {
-  /** 资源栈里的默认字体（minecraft:default）；没有原版层或资源包提供时为 null */
-  vanilla: FontPayload | null;
-  /** 兜底像素字体；载入失败时为 null */
-  fallback: BitmapFontPayload | null;
+interface TextureEntry {
+  result: Promise<THREE.Texture | null>;
+  retryRequired: boolean;
 }
 
 export class EngineResources {
   private stamp: string | null = null;
-  private readonly textures = new Map<string, Promise<THREE.Texture>>();
+  private readonly textures = new Map<string, TextureEntry>();
   private readonly animated = new Set<THREE.Texture>();
   private placeholder: THREE.Texture | null = null;
-  private vanillaFont: Promise<FontPayload | null> | null = null;
-  private fallbackFont: Promise<BitmapFontPayload | null> | null = null;
+  private readonly catalogPlaceholders = new Map<string, THREE.Texture>();
+  private readonly fontCache = new Map<string, Promise<FontPayload | null>>();
 
   constructor(
     private readonly resolve: ResolveResource,
     private readonly log: (level: 'debug' | 'warn' | 'error', message: string) => void,
   ) {}
 
-  /** 资源栈变了：清空贴图和资源栈字体（兜底字体不随资源栈变） */
+  /** 资源栈变了：清空贴图和资源栈字体。 */
   setStamp(stamp: string): void {
     if (stamp === this.stamp) return;
     this.stamp = stamp;
@@ -108,16 +105,12 @@ export class EngineResources {
   }
 
   clear(): void {
-    for (const p of this.textures.values())
-      void p.then(
-        (t) => {
-          if (t !== this.placeholder) t.dispose();
-        },
-        () => undefined,
-      );
+    for (const tex of this.catalogPlaceholders.values()) tex.dispose();
+    this.catalogPlaceholders.clear();
+    for (const entry of this.textures.values()) void entry.result.then((tex) => tex?.dispose());
     this.textures.clear();
     this.animated.clear();
-    this.vanillaFont = null;
+    this.fontCache.clear();
     this.sounds.clear();
   }
 
@@ -165,24 +158,48 @@ export class EngineResources {
   /** 设好过滤和色彩空间的贴图；缺失时返回占位图并经 warn 记一条警告（3.2、T-AST-3） */
   texture(id: string, warn: Warn): Promise<THREE.Texture> {
     if (typeof id !== 'string' || id.length === 0 || id.length > 512) return Promise.reject(new TypeError('invalid texture id'));
-    let p = this.textures.get(id);
-    if (!p) {
-      const fetched = this.fetchTexture(id).catch((error: unknown) => {
+    const cached = this.textures.get(id);
+    const entry = cached && !cached.retryRequired ? cached : this.loadTexture(id);
+    return entry.result.then((tex) => {
+      if (tex) return tex;
+      const placeholder = this.requiredPlaceholder(id);
+      warn(`texture ${id} is missing; a placeholder is used`, placeholder === this.placeholder ? undefined : 'catalog-placeholder');
+      return placeholder;
+    });
+  }
+
+  optionalTexture(id: string): Promise<THREE.Texture | null> {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 512) return Promise.reject(new TypeError('invalid texture id'));
+    return (this.textures.get(id) ?? this.loadTexture(id)).result;
+  }
+
+  private requiredPlaceholder(id: string): THREE.Texture {
+    const existing = this.catalogPlaceholders.get(id);
+    if (existing) return existing;
+    const image = catalogPlaceholder(id);
+    if (!image) return this.placeholderTexture();
+    const { width, height, pixels, nineSlice } = image;
+    const texture = makeDataTexture(width, height, pixels);
+    attachInfo(texture, { id, pixels, width, height, frameWidth: width, frameHeight: height, nineSlice, animation: null, missing: true });
+    this.catalogPlaceholders.set(id, texture);
+    return texture;
+  }
+
+  private loadTexture(id: string): TextureEntry {
+    const entry: TextureEntry = {
+      retryRequired: false,
+      result: this.fetchTexture(id).then((tex) => {
+        if (!tex) entry.retryRequired = true;
+        if (tex && this.textures.get(id) === entry && textureInfo(tex)?.animation) this.animated.add(tex);
+        return tex;
+      }).catch((error: unknown) => {
+        entry.retryRequired = true;
         this.log('warn', `texture ${id} failed: ${error instanceof Error ? error.message : String(error)}`);
         return null;
-      });
-      p = fetched.then((tex) => {
-        if (tex) return tex;
-        // 缺失的不缓存占位，下一次 setup 仍然报警告
-        this.textures.delete(id);
-        return this.placeholderTexture();
-      });
-      this.textures.set(id, p);
-    }
-    return p.then((tex) => {
-      if (textureInfo(tex)?.missing) warn(`texture ${id} is missing; a placeholder is used`);
-      return tex;
-    });
+      }),
+    };
+    this.textures.set(id, entry);
+    return entry;
   }
 
   placeholderTexture(): THREE.Texture {
@@ -224,28 +241,22 @@ export class EngineResources {
     if (animation) {
       tex.repeat.set(animation.frameWidth / payload.width, animation.frameHeight / payload.height);
       showFrame(tex, info, animationFrameAt(animation, 0));
-      this.animated.add(tex);
     }
     return tex;
   }
 
   /** 文字用的字体，在每次 setup 之前载入（text.create 是同步的） */
-  async fonts(): Promise<LoadedFonts> {
-    this.vanillaFont ??= this.resolve('font', DEFAULT_FONT_ID).then(
-      (raw) => (raw === null ? null : FontPayloadSchema.parse(raw)),
-      (error: unknown) => {
-        this.log('warn', `font ${DEFAULT_FONT_ID} failed: ${error instanceof Error ? error.message : String(error)}`);
+  async fonts(requested = DEFAULT_FONT_ID): Promise<FontPayload | null> {
+    const id = normalizeRequestedFont(requested);
+    let font = this.fontCache.get(id);
+    if (!font) {
+      font = this.resolve('font', id).then((raw) => raw === null ? null : FontPayloadSchema.parse(raw)).catch((error: unknown) => {
+        this.log('warn', `font ${id} failed: ${String(error)}`);
         return null;
-      },
-    );
-    this.fallbackFont ??= this.resolve('font', FALLBACK_FONT_ID).then(
-      (raw) => (raw === null ? null : BitmapFontPayloadSchema.parse(raw)),
-      (error: unknown) => {
-        this.log('warn', `fallback font failed: ${error instanceof Error ? error.message : String(error)}`);
-        return null;
-      },
-    );
-    const [vanilla, fallback] = await Promise.all([this.vanillaFont, this.fallbackFont]);
-    return { vanilla, fallback };
+      });
+      this.fontCache.set(id, font);
+      if (this.fontCache.size > 8) this.fontCache.delete(this.fontCache.keys().next().value!);
+    }
+    return font;
   }
 }

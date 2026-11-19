@@ -14,17 +14,17 @@ function pngChunk(type: string, body: Buffer): Buffer {
 }
 
 /**
- * 纯色 16×h 的 PNG：只是测试数据，用颜色区分“这张贴图来自哪一层”，不是产品素材，也不进安装包。
+ * 纯色 PNG：只是测试数据，用颜色区分“这张贴图来自哪一层”，不是产品素材，也不进安装包。
  */
-export function solidPng(color: string, height = 16): Uint8Array {
+export function solidPng(color: string, height = 16, width = 16): Uint8Array {
   const n = Number.parseInt(color.slice(1), 16);
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(16, 0);
+  ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
-  const row = Buffer.alloc(1 + 16 * 4);
-  for (let x = 0; x < 16; x++) row.set([(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255], 1 + x * 4);
+  const row = Buffer.alloc(1 + width * 4);
+  for (let x = 0; x < width; x++) row.set([(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255], 1 + x * 4);
   const raw = Buffer.concat(Array.from({ length: height }, () => row));
   return new Uint8Array(
     Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), pngChunk('IDAT', deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]),

@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
-import { builtinTemplates, contentSecurityPolicy, fontLicense, mascotAssets, pixelFont, preloadFonts, websiteMc } from './build/plugins';
+import { builtinTemplates, contentSecurityPolicy, mascotAssets, websiteMc } from './build/plugins';
 
 const here = import.meta.dirname;
 
@@ -11,7 +11,7 @@ const here = import.meta.dirname;
 export default defineConfig({
   root: here,
   base: './',
-  plugins: [tailwindcss(), builtinTemplates(), websiteMc(), mascotAssets(), pixelFont(), fontLicense(), preloadFonts(), contentSecurityPolicy()],
+  plugins: [tailwindcss(), builtinTemplates(), websiteMc(), mascotAssets(), contentSecurityPolicy()],
   // 引擎 Worker 是 module worker（docs/02-engine.md 2.2）
   worker: { format: 'es' },
   // 渲染进程的源码在 apps/desktop 下，它的依赖从那边的 node_modules 解析；这些包必须全页面只有一份

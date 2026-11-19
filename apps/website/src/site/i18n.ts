@@ -36,8 +36,6 @@ export async function initSiteI18n(language: SiteLanguage): Promise<typeof i18ne
 /** 宿主层要的几句话（演示层名称、导出目标），两种语言都给 */
 export function hostMessages() {
   return {
-    demoPackName: { 'zh-CN': zhCN.host.demoPackName, en: en.host.demoPackName },
-    demoPackDescription: { 'zh-CN': zhCN.host.demoPackDescription, en: en.host.demoPackDescription },
     mcPackName: { 'zh-CN': zhCN.host.mcPackName, en: en.host.mcPackName },
     mcPackDescription: { 'zh-CN': zhCN.host.mcPackDescription, en: en.host.mcPackDescription },
     exportTarget: { 'zh-CN': zhCN.host.exportTarget, en: en.host.exportTarget },

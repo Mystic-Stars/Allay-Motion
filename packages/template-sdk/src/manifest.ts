@@ -1,6 +1,7 @@
 // 模板 manifest 与参数定义的 schema（docs/04-templates.md 4.3、4.4）。TS 类型从 schema 推出。
 // 未知字段保留但忽略（looseObject）。校验失败时 zod 的 issue 路径指向具体字段（T-TPL-1）。
 import { z } from 'zod';
+import { FontRefSchema } from './font';
 import type { ParamValue } from './runtime';
 import { isValidRange, isValidVersion } from './semver';
 
@@ -72,12 +73,18 @@ const ParamValueJson: z.ZodType<ParamValue> = z.lazy(() =>
   z.union([z.number(), z.string(), z.boolean(), z.null(), z.array(ParamValueJson), z.record(z.string(), ParamValueJson)]),
 );
 
-export const VisibleWhenSchema = z.strictObject({
+const VisibilityClauseSchema = z.strictObject({
   key: ParamKeySchema,
   equals: ParamValueJson.optional(),
   in: z.array(ParamValueJson).max(64).optional(),
   not: ParamValueJson.optional(),
 });
+const VisibilityGroupSchema = z.strictObject({ all: z.array(VisibilityClauseSchema).min(1).max(8) });
+export const VisibleWhenSchema = z.union([
+  VisibilityClauseSchema,
+  VisibilityGroupSchema,
+  z.strictObject({ any: z.array(z.union([VisibilityClauseSchema, VisibilityGroupSchema])).min(1).max(8) }),
+]);
 
 const base = {
   key: ParamKeySchema,
@@ -103,28 +110,49 @@ const EnumParam = z
     type: z.literal('enum'),
     default: z.string().max(64),
     options: z.array(z.strictObject({ value: z.string().min(1).max(64), label: LocalizedStringSchema, pattern: EnumPattern.optional() })).min(1).max(64),
+    legacyDefault: z.strictObject({
+      value: z.string().max(64), when: VisibilityClauseSchema,
+      nonBlankText: z.array(ParamKeySchema).min(1).max(4),
+      presetText: z.record(ParamKeySchema, z.array(z.string().max(256)).max(8)).optional(),
+      skipPresetText: z.boolean().optional(),
+      allowBlankText: z.boolean().optional(),
+    }).optional(),
     /** 界面提示：'pattern' 用图案小格选择器（每个选项都要带 pattern）；不写时按选项数走分段控件或下拉 */
     ui: z.literal('pattern').optional(),
   })
   .superRefine((p, ctx) => {
+    if (p.legacyDefault && !p.options.some(({ value }) => value === p.legacyDefault?.value)) {
+      ctx.addIssue({ code: 'custom', path: ['legacyDefault', 'value'], message: 'legacyDefault must select an enum option' });
+    }
     if (p.ui !== 'pattern') return;
     p.options.forEach((o, i) => {
       if (!o.pattern) ctx.addIssue({ code: 'custom', path: ['options', i, 'pattern'], message: "ui: 'pattern' needs a pattern on every option" });
     });
   });
+const LegacyTextSource = z.strictObject({
+  key: ParamKeySchema, skipEmpty: z.boolean().optional(),
+  when: z.strictObject({ key: ParamKeySchema, in: z.array(z.string().max(64)).min(1).max(64) }),
+  except: z.array(z.string().max(256)).max(8).optional(),
+});
+const LegacyTextSources = z.array(LegacyTextSource).min(1).max(4).optional();
 const ColorParam = z.looseObject({
   ...base,
   type: z.literal('color'),
   default: z.string().regex(COLOR_RE, 'must be #RRGGBB or #RRGGBBAA'),
   alpha: z.boolean().optional(),
   palette: z.enum(['dye', 'chat']).optional(),
+  legacyText: LegacyTextSources,
 });
-const TextParam = z.looseObject({ ...base, type: z.literal('text'), default: LocalizedStringSchema, maxLength: z.int().min(1).max(10_000).optional(), multiline: z.boolean().optional() });
+const TextParam = z.looseObject({
+  ...base, type: z.literal('text'), default: LocalizedStringSchema, maxLength: z.int().min(1).max(10_000).optional(), multiline: z.boolean().optional(),
+  legacyText: LegacyTextSources,
+});
 const BlockParam = z.looseObject({ ...base, type: z.literal('block'), default: resourceId });
 export const BlockListEntrySchema = z.strictObject({ id: resourceId, weight: z.number().min(0).max(1000) });
 const BlockListParam = z.looseObject({ ...base, type: z.literal('blockList'), default: z.array(BlockListEntrySchema).min(1).max(64), max: z.int().min(1).max(64).optional() });
 const ItemParam = z.looseObject({ ...base, type: z.literal('item'), default: resourceId });
 const TextureParam = z.looseObject({ ...base, type: z.literal('texture'), default: z.string().max(256), allowFile: z.boolean().optional() });
+const FontParam = z.looseObject({ ...base, type: z.literal('font'), default: FontRefSchema });
 const SoundParam = z.looseObject({ ...base, type: z.literal('sound'), default: resourceId.nullable() });
 const EasingParam = z.looseObject({
   ...base,
@@ -146,6 +174,7 @@ export const ParamDefSchema = z.discriminatedUnion('type', [
   BlockListParam,
   ItemParam,
   TextureParam,
+  FontParam,
   SoundParam,
   EasingParam,
   DurationParam,
@@ -156,9 +185,9 @@ export type ParamDef = z.infer<typeof ParamDefSchema>;
 export type ParamType = ParamDef['type'];
 export type ParamDefOf<T extends ParamType> = Extract<ParamDef, { type: T }>;
 
-/** 15 种参数类型（4.4） */
+/** 参数类型（4.4） */
 export const PARAM_TYPES = [
-  'number', 'integer', 'boolean', 'enum', 'color', 'text', 'block', 'blockList', 'item', 'texture', 'sound', 'easing', 'duration', 'angle', 'seed',
+  'number', 'integer', 'boolean', 'enum', 'color', 'text', 'block', 'blockList', 'item', 'texture', 'font', 'sound', 'easing', 'duration', 'angle', 'seed',
 ] as const satisfies readonly ParamType[];
 
 // ---- manifest（4.3）----
@@ -236,9 +265,18 @@ export const TemplateManifestSchema = ManifestShape.superRefine((m, ctx) => {
   if (groupKeys.size !== (m.groups ?? []).length) ctx.addIssue({ code: 'custom', path: ['groups'], message: 'duplicate group key' });
   params.forEach((p, i) => {
     if (p.group !== undefined && !groupKeys.has(p.group)) ctx.addIssue({ code: 'custom', path: ['params', i, 'group'], message: `unknown group "${p.group}"` });
-    if (p.visibleWhen && (!keys.has(p.visibleWhen.key) || p.visibleWhen.key === p.key)) {
-      ctx.addIssue({ code: 'custom', path: ['params', i, 'visibleWhen', 'key'], message: `visibleWhen refers to unknown param "${p.visibleWhen.key}"` });
+    const checkKey = (key: string, path: (string | number)[]) => {
+      if (!keys.has(key) || key === p.key) ctx.addIssue({ code: 'custom', path: ['params', i, ...path], message: `condition refers to unknown or same param "${key}"` });
+    };
+    const checkGroup = (condition: z.infer<typeof VisibilityClauseSchema> | z.infer<typeof VisibilityGroupSchema>, path: (string | number)[]) => {
+      if ('all' in condition) condition.all.forEach(({ key }, index) => checkKey(key, [...path, 'all', index, 'key']));
+      else checkKey(condition.key, [...path, 'key']);
+    };
+    if (p.visibleWhen) {
+      if ('any' in p.visibleWhen) p.visibleWhen.any.forEach((group, index) => checkGroup(group, ['visibleWhen', 'any', index]));
+      else checkGroup(p.visibleWhen, ['visibleWhen']);
     }
+    if (p.type === 'enum' && p.legacyDefault) checkKey(p.legacyDefault.when.key, ['legacyDefault', 'when', 'key']);
   });
   if (m.extends) {
     // 派生模板：参数定义来自基模板

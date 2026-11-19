@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import { IPC, type InvokeChannel } from '../shared/ipc-channels';
 import type { AllayApi } from './api';
+import { CODE_INSPECTOR_CHANNELS, type CodeInspectorAction, type CodeInspectorParentApi } from '../shared/code-inspector';
 import type { ResourceState } from '../shared/resources';
 import type { UiSettings } from '../shared/settings';
 import type { TemplateDevChange } from '../shared/templates';
@@ -26,6 +27,12 @@ function subscribe<T>(channel: string) {
 }
 
 const api = {
+  codeInspector: {
+    open: (): Promise<void> => ipcRenderer.invoke(CODE_INSPECTOR_CHANNELS.open),
+    publish: (packet) => ipcRenderer.send(CODE_INSPECTOR_CHANNELS.publish, packet),
+    onOpenChanged: subscribe<boolean>(CODE_INSPECTOR_CHANNELS.openChanged),
+    onAction: subscribe<CodeInspectorAction>(CODE_INSPECTOR_CHANNELS.parentAction),
+  } satisfies CodeInspectorParentApi,
   app: {
     info: invoke(IPC.app.info),
   },
@@ -38,9 +45,25 @@ const api = {
     setTitleBarColors: invoke(IPC.window.setTitleBarColors),
     reload: invoke(IPC.window.reload),
   },
+  fonts: {
+    list: invoke(IPC.fonts.list),
+  },
   files: {
     pickImage: invoke(IPC.files.pickImage),
     read: invoke(IPC.files.read),
+  },
+  sound: {
+    pick: invoke(IPC.sound.pick),
+    list: invoke(IPC.sound.list),
+    read: invoke(IPC.sound.read),
+    fetchNames: invoke(IPC.sound.fetchNames),
+  },
+  skins: {
+    list: invoke(IPC.skins.list),
+    importPng: invoke(IPC.skins.importPng),
+    fetchJava: invoke(IPC.skins.fetchJava),
+    read: invoke(IPC.skins.read),
+    remove: invoke(IPC.skins.remove),
   },
   export: {
     start: invoke(IPC.export.start),
@@ -65,10 +88,14 @@ const api = {
     soundFiles: invoke(IPC.resources.soundFiles),
     list: invoke(IPC.resources.list),
     fontProviders: invoke(IPC.resources.fontProviders),
-    fallbackFont: invoke(IPC.resources.fallbackFont),
     detectMinecraft: invoke(IPC.resources.detectMinecraft),
     setVanilla: invoke(IPC.resources.setVanilla),
     chooseGameDir: invoke(IPC.resources.chooseGameDir),
+    selectProfile: invoke(IPC.resources.selectProfile),
+    officialVersions: invoke(IPC.resources.officialVersions),
+    locateProfile: invoke(IPC.resources.locateProfile),
+    instancePacks: invoke(IPC.resources.instancePacks),
+    setInstancePack: invoke(IPC.resources.setInstancePack),
     downloadVanilla: invoke(IPC.resources.downloadVanilla),
     cancelDownload: invoke(IPC.resources.cancelDownload),
     addPack: invoke(IPC.resources.addPack),
@@ -102,6 +129,13 @@ const api = {
     copyBuiltin: invoke(IPC.templates.copyBuiltin),
     writeDevFiles: invoke(IPC.templates.writeDevFiles),
     openFolder: invoke(IPC.templates.openFolder),
+    readSource: invoke(IPC.templates.readSource),
+    writeSource: invoke(IPC.templates.writeSource),
+    createBlank: invoke(IPC.templates.createBlank),
+    freezeComposition: invoke(IPC.templates.freezeComposition),
+    importComposition: invoke(IPC.templates.importComposition),
+    listCompositions: invoke(IPC.templates.listCompositions),
+    openComposition: invoke(IPC.templates.openComposition),
     onChanged: subscribe<TemplateDevChange>(IPC.templates.changed),
   },
   presets: {
@@ -122,6 +156,7 @@ const api = {
   host: {
     onCommand: subscribe<HostCommandRequest>(IPC.host.command),
     commandResult: invoke(IPC.host.commandResult),
+    setMacMenuState: invoke(IPC.host.macMenuState),
     ready: invoke(IPC.host.ready),
   },
   folders: {

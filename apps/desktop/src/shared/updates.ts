@@ -20,26 +20,36 @@ export const UpdateSourcePrefSchema = z.enum(UPDATE_SOURCE_PREFS);
 export type UpdateSourcePref = z.infer<typeof UpdateSourcePrefSchema>;
 export type UpdateSource = Exclude<UpdateSourcePref, 'auto'>;
 
+export const UPDATE_CHANNELS = ['codex', 'main', 'dev'] as const;
+export const UpdateChannelSchema = z.enum(UPDATE_CHANNELS);
+export type UpdateChannel = z.infer<typeof UpdateChannelSchema>;
+
 const VersionSchema = z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).max(64);
 
 export const UpdatePrefsSchema = z.strictObject({
   mode: UpdateModeSchema.catch('auto'),
   source: UpdateSourcePrefSchema.catch('auto'),
+  channel: UpdateChannelSchema.catch('main'),
   /** “跳过这个版本”：自动检查时不再提示这个版本（手动检查照常显示） */
   skipVersion: VersionSchema.nullable().catch(null),
 });
 export type UpdatePrefs = z.infer<typeof UpdatePrefsSchema>;
 
 export function defaultUpdatePrefs(): UpdatePrefs {
-  return { mode: 'auto', source: 'auto', skipVersion: null };
+  return { mode: 'auto', source: 'auto', channel: 'main', skipVersion: null };
 }
 
-/** 渲染进程发来的修改：整体替换 */
+/** 渲染进程发来的修改：整体替换；旧客户端省略渠道时仍使用正式版 */
 export const UpdatePrefsPatchSchema = z.strictObject({
   mode: UpdateModeSchema,
   source: UpdateSourcePrefSchema,
+  channel: UpdateChannelSchema.optional(),
   skipVersion: VersionSchema.nullable(),
-});
+}).transform(({ channel, skipVersion, ...prefs }): UpdatePrefs => ({
+  ...prefs,
+  channel: channel ?? 'main',
+  skipVersion: channel && skipVersion && channelVersion(`v${skipVersion}`, channel) === null ? null : skipVersion,
+}));
 
 // ---- 状态（主进程 → 渲染进程）----
 
@@ -63,6 +73,7 @@ export interface UpdateRelease {
 export interface UpdateState {
   status: UpdateStatus;
   currentVersion: string;
+  channel: UpdateChannel;
   /** 按设置和时区实际首选的源 */
   preferredSource: UpdateSource;
   latest: UpdateRelease | null;
@@ -101,16 +112,25 @@ export function versionFromTag(tag: string): string | null {
   return VersionSchema.safeParse(v).success ? v : null;
 }
 
+const CHANNEL_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(codex|dev)\.(0|[1-9]\d*))?$/;
+
+export function channelVersion(tag: string, channel: UpdateChannel): string | null {
+  const match = CHANNEL_TAG.exec(tag);
+  return match?.[0] === tag && (match[4] ?? 'main') === channel ? versionFromTag(tag) : null;
+}
+
 /** 语义化版本比较：a 比 b 新时为正数 */
 export function compareVersions(a: string, b: string): number {
   const split = (v: string) => {
-    const [core = '', pre] = v.split('-', 2) as [string, string | undefined];
-    return { nums: core.split('.').map((n) => Number(n)), pre: pre ?? null };
+    const suffix = v.indexOf('-');
+    const core = suffix < 0 ? v : v.slice(0, suffix);
+    return { nums: core.split('.'), pre: suffix < 0 ? null : v.slice(suffix + 1) };
   };
+  const numericOrder = (left: string, right: string) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0);
   const x = split(a);
   const y = split(b);
   for (let i = 0; i < 3; i++) {
-    const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
+    const d = numericOrder(x.nums[i] ?? '0', y.nums[i] ?? '0');
     if (d !== 0) return d;
   }
   // 同一个核心版本：正式版比预发布版新
@@ -124,11 +144,13 @@ export function compareVersions(a: string, b: string): number {
     const q = yp[i];
     if (p === undefined) return -1;
     if (q === undefined) return 1;
-    const pn = /^\d+$/.test(p) ? Number(p) : null;
-    const qn = /^\d+$/.test(q) ? Number(q) : null;
-    if (pn !== null && qn !== null && pn !== qn) return pn - qn;
-    if (pn !== null && qn === null) return -1;
-    if (pn === null && qn !== null) return 1;
+    const pn = /^\d+$/.test(p);
+    const qn = /^\d+$/.test(q);
+    if (pn && qn) {
+      const order = numericOrder(p, q);
+      if (order !== 0) return order;
+    }
+    if (pn !== qn) return pn ? -1 : 1;
     if (p !== q) return p < q ? -1 : 1;
   }
   return 0;

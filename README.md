@@ -44,7 +44,7 @@ pnpm dev
 
 - FFmpeg（LGPLv3）以独立进程调用，随安装包附带许可全文；构建来源和源码去处写在应用的“关于”页。Windows 版用 FFmpeg-Builds 的 LGPL 构建，macOS 版由本项目从官方源码按 LGPL 配置编译（静态链接 BSD 许可的 libvpx、libopus）。
 - macOS 版只做了 ad-hoc 签名、没有经过 Apple 公证：首次打开时在“访达”里右键选“打开”，macOS 15 起到“系统设置 → 隐私与安全性”里点“仍要打开”。
-- 方舟像素字体、IBM Plex、Noto Sans SC 使用 SIL Open Font License 1.1。
+- 品牌和应用界面使用系统 UI 字体，代码使用系统等宽字体。桌面和官网均不分发文字字体；作品使用已授权资源层的游戏字形，缺字逐字回退到本机系统字体。
 - 其余依赖使用 MIT、BSD、ISC、Apache-2.0 等许可；完整清单在“关于 → 第三方许可”和安装目录的 `THIRD_PARTY_NOTICES.txt`。
 
 ## 许可 / License

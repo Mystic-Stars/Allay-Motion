@@ -34,6 +34,9 @@ export interface SoundEvent {
   sounds: SoundEntry[];
   /** 这个事件当前的定义是否只来自 builtin 层 */
   builtinOnly: boolean;
+  subtitle?: string;
+  vanilla?: boolean;
+  packDefinition?: boolean;
 }
 
 /** 完整事件 ID（带命名空间）→ 合并后的定义 */
@@ -71,12 +74,12 @@ function parseEntry(raw: unknown, namespace: string): SoundEntry | null {
 }
 
 export interface ParsedSoundsJson {
-  events: Map<string, { sounds: SoundEntry[]; replace: boolean }>;
+  events: Map<string, { sounds: SoundEntry[]; replace: boolean; subtitle?: string }>;
 }
 
 /** 宽松解析一个 sounds.json：坏掉的条目跳过，整个文件坏了就当作空 */
 export function parseSoundsJson(text: string, namespace: string): ParsedSoundsJson {
-  const events = new Map<string, { sounds: SoundEntry[]; replace: boolean }>();
+  const events: ParsedSoundsJson['events'] = new Map();
   let root: unknown;
   try {
     root = JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -89,7 +92,8 @@ export function parseSoundsJson(text: string, namespace: string): ParsedSoundsJs
     if (!id || typeof value !== 'object' || value === null || Array.isArray(value)) continue;
     const v = value as Record<string, unknown>;
     const sounds = Array.isArray(v.sounds) ? v.sounds.map((s) => parseEntry(s, namespace)).filter((s): s is SoundEntry => s !== null) : [];
-    events.set(id, { sounds, replace: v.replace === true });
+    const subtitle = typeof v.subtitle === 'string' && v.subtitle.length <= 256 ? v.subtitle : undefined;
+    events.set(id, { sounds, replace: v.replace === true, ...(subtitle !== undefined ? { subtitle } : {}) });
   }
   return { events };
 }
@@ -105,11 +109,15 @@ export function mergeSoundDefinitions(sourcesBottomToTop: readonly { kind: Layer
     for (const [id, def] of parsed.events) {
       const prev = out.get(id);
       const builtin = kind === 'builtin';
-      if (!prev || def.replace || (prev.builtinOnly && !builtin)) {
-        out.set(id, { sounds: [...def.sounds], builtinOnly: builtin });
-      } else {
-        out.set(id, { sounds: [...prev.sounds, ...def.sounds], builtinOnly: prev.builtinOnly && builtin });
-      }
+      const replace = !prev || def.replace || (prev.builtinOnly && !builtin);
+      const subtitle = replace ? def.subtitle : prev.subtitle;
+      out.set(id, {
+        sounds: replace ? [...def.sounds] : [...prev.sounds, ...def.sounds],
+        builtinOnly: replace ? builtin : prev.builtinOnly && builtin,
+        vanilla: prev?.vanilla === true || kind === 'vanilla',
+        packDefinition: prev?.packDefinition === true || kind === 'pack',
+        ...(subtitle !== undefined ? { subtitle } : {}),
+      });
     }
   }
   return out;
@@ -129,11 +137,12 @@ export function expandSoundEvent(defs: SoundDefinitions, eventId: string): Sound
   if (!id) return [];
   const out: SoundVariant[] = [];
   const visit = (evId: string, volume: number, pitch: number, weight: number | null, seen: Set<string>) => {
-    if (seen.has(evId) || seen.size > 16) return;
+    if (seen.has(evId) || seen.size > 16 || out.length >= 1024) return;
     const def = defs.get(evId);
     if (!def) return;
     const next = new Set(seen).add(evId);
     for (const s of def.sounds) {
+      if (out.length >= 1024) break;
       if (s.weight === 0) continue;
       const w = weight ?? s.weight;
       if (s.type === 'event') visit(s.name, volume * s.volume, pitch * s.pitch, w, next);
@@ -148,7 +157,7 @@ export function expandSoundEvent(defs: SoundDefinitions, eventId: string): Sound
  * 按权重选一个变体。r 是 [0, 1) 的随机数，由引擎用 ctx.random('sound:' + id + ':' + 序号) 给出（02-engine.md 2.10），
  * 保证预览和导出选到同一个。
  */
-export function pickSoundVariant(variants: readonly SoundVariant[], r: number): SoundVariant | null {
+export function pickSoundVariant<T extends SoundVariant>(variants: readonly T[], r: number): T | null {
   const total = variants.reduce((s, v) => s + v.weight, 0);
   if (total <= 0) return null;
   let x = Math.min(Math.max(r, 0), 0.999999999) * total;

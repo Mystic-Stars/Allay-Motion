@@ -5,12 +5,14 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { UpdateState } from '../../../shared/updates';
+import { useUiStore } from '../../stores/uiStore';
 import { skipVersion, useUpdateStore } from './updateStore';
 
 // 新版本的通知（Sonner，6.5 的样子）：一句话加两个按钮。发现新版本时“下载 / 跳过这个版本”，下载完时“重启并安装 / 稍后”。
 
 export function UpdateToast({ state, onClose }: { state: UpdateState; onClose(): void }) {
   const { t } = useTranslation();
+  const actionable = useUpdateStore((s) => !s.switchingChannel && s.state === state);
   const version = state.latest?.version ?? '';
   const downloaded = state.status === 'downloaded';
   const mac = navigator.userAgent.includes('Mac');
@@ -28,9 +30,10 @@ export function UpdateToast({ state, onClose }: { state: UpdateState; onClose():
             </Button>
             <Button
               data-testid="update-toast-install"
+              disabled={!actionable}
               onClick={() => {
                 onClose();
-                void useUpdateStore.getState().install();
+                void useUpdateStore.getState().install(state);
               }}
             >
               <ArrowsClockwise size={ICON.sm} />
@@ -41,8 +44,9 @@ export function UpdateToast({ state, onClose }: { state: UpdateState; onClose():
           <>
             <Button
               variant="ghost"
+              disabled={!actionable}
               onClick={() => {
-                skipVersion(version);
+                skipVersion(version, state);
                 onClose();
               }}
             >
@@ -50,9 +54,10 @@ export function UpdateToast({ state, onClose }: { state: UpdateState; onClose():
             </Button>
             <Button
               data-testid="update-toast-download"
+              disabled={!actionable}
               onClick={() => {
                 onClose();
-                void useUpdateStore.getState().download();
+                void useUpdateStore.getState().download(state);
               }}
             >
               <CloudArrowDown size={ICON.sm} />
@@ -70,12 +75,28 @@ const UPDATE_TOAST_ID = 'update';
 /** 订阅主进程推来的更新状态；自动检查发现新版本、后台下载完成时弹一条带按钮的通知（App 里调用一次） */
 export function useUpdateNotifications(): void {
   useEffect(() => {
-    void useUpdateStore.getState().load();
-    return window.allay.updates.onChanged((state) => {
-      useUpdateStore.setState({ state });
-      if (!state.announce || !state.latest) return;
-      if (state.status !== 'available' && state.status !== 'downloaded') return;
-      toast.custom((id) => <UpdateToast state={state} onClose={() => toast.dismiss(id)} />, { id: UPDATE_TOAST_ID, duration: 30_000 });
+    const store = useUpdateStore.getState();
+    const unsubscribeChannel = useUiStore.subscribe((next, prev) => {
+      if (next.settings.updates.channel === prev.settings.updates.channel) return;
+      store.invalidate();
+      toast.dismiss(UPDATE_TOAST_ID);
     });
+    const unsubscribeToast = useUpdateStore.subscribe((next, prev) => {
+      if (next.switchingChannel && next.switchingChannel !== prev.switchingChannel) toast.dismiss(UPDATE_TOAST_ID);
+    });
+    const unsubscribeUpdates = window.allay.updates.onChanged((state) => {
+      if (!store.receive(state)) return;
+      if (state.announce && state.latest && (state.status === 'available' || state.status === 'downloaded')) {
+        toast.custom((id) => <UpdateToast state={state} onClose={() => toast.dismiss(id)} />, { id: UPDATE_TOAST_ID, duration: 30_000 });
+      } else {
+        toast.dismiss(UPDATE_TOAST_ID);
+      }
+    });
+    void store.load();
+    return () => {
+      unsubscribeUpdates();
+      unsubscribeToast();
+      unsubscribeChannel();
+    };
   }, []);
 }

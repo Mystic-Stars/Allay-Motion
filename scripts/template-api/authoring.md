@@ -106,6 +106,8 @@ export default {
 - 每个参数都有 `key`（`^[a-z][a-zA-Z0-9]*$`，模板内唯一）和 `label`；可选 `hint`、`group`、`visibleWhen`。
 - 模板有 `seed` 参数时，`ctx.random` 以它为种子。
 - `texture` 参数的值可以原样交给 `ctx.resources.texture()`；`easing` 参数的值交给 `ctx.ease.from()`。
+- 在 `setup` 里用 `await ctx.resources.optionalTexture(id)` 检查可选素材，例如 `minecraft:ui/loading_bar`。它接受和 `texture()` 相同的资源 ID、已授权本机图片或模板资产引用；取不到返回 `null`，不出现品红占位。探测按资源代缓存；需要贴图时仍可用 `texture()`，照常报告缺失。不要修改或释放两者返回的共享贴图。
+- `ctx.locale` 是装载时的宿主语言（例如 `zh-CN`；未提供时 `en`）。用于选择模板内的默认文案，不替换用户输入。
 - 用 `timeline.segments` 把几个 `duration` 参数声明成首尾相接的时间段，播放条上可以拖分界线。
 
 ## 7. 出错时看到什么

@@ -2,6 +2,7 @@
 // 引擎（装载时）和界面（属性面板、预设、工程）共用这一份。纯函数，不抛错。
 import { COLOR_RE, EASING_NAMES, FILE_REF_RE, isAssetRef, isResourceId, localize, type ParamDef } from './manifest';
 import type { ParamValue, ParamValues } from './runtime';
+import { FontRefSchema } from './font';
 
 /** text 参数的多语言默认值按这个语言取；缺省英文 */
 export interface SanitizeOptions {
@@ -65,6 +66,8 @@ export function sanitizeValue(def: ParamDef, value: unknown, options: SanitizeOp
     case 'sound':
       if (value === null) return null;
       return typeof value === 'string' && isResourceId(value) ? value : fallback();
+    case 'font':
+      return FontRefSchema.safeParse(value).success ? (value as string) : fallback();
     case 'texture': {
       if (typeof value !== 'string' || value.length > 256) return fallback();
       if (value === '' || isResourceId(value) || isAssetRef(value)) return value;
@@ -101,9 +104,35 @@ export function sanitizeParams(defs: readonly ParamDef[], values: Readonly<Recor
   const out: ParamValues = {};
   const src = values && typeof values === 'object' && !Array.isArray(values) ? values : {};
   for (const def of defs) {
-    out[def.key] = Object.hasOwn(src, def.key) ? sanitizeValue(def, src[def.key], options) : defaultValue(def, options);
+    const value = Object.hasOwn(src, def.key) ? src[def.key] : readLegacyParam(def, src);
+    out[def.key] = sanitizeValue(def, value, options);
   }
   return out;
+}
+
+export function readLegacyParam(def: ParamDef, src: Readonly<Record<string, unknown>>): string | undefined {
+  if (def.type === 'text' || def.type === 'color') return readLegacyText(def, src);
+  if (def.type !== 'enum' || !def.legacyDefault || !matchesParamCondition(def.legacyDefault.when, src)) return undefined;
+  for (const key of def.legacyDefault.nonBlankText) {
+    const text = Object.hasOwn(src, key) ? src[key] : undefined;
+    if (typeof text !== 'string') continue;
+    const presets = def.legacyDefault.presetText;
+    const isPreset = presets && Object.hasOwn(presets, key) && presets[key]?.some((preset) => preset === text || (COLOR_RE.test(preset) && preset === text.toUpperCase()));
+    if (isPreset && def.legacyDefault.skipPresetText) continue;
+    return (text.trim() || def.legacyDefault.allowBlankText) && !isPreset ? def.legacyDefault.value : undefined;
+  }
+  return undefined;
+}
+
+export function readLegacyText(def: Extract<ParamDef, { type: 'text' | 'color' }>, src: Readonly<Record<string, unknown>>): string | undefined {
+  for (const { key, when, skipEmpty, except } of def.legacyText ?? []) {
+    const discriminator = Object.hasOwn(src, when.key) ? src[when.key] : undefined;
+    const prior = Object.hasOwn(src, key) ? src[key] : undefined;
+    if (typeof prior !== 'string' || (skipEmpty && prior === '') || typeof discriminator !== 'string' || !when.in.includes(discriminator)) continue;
+    const value = def.type === 'color' ? prior.toUpperCase() : prior;
+    if (!except?.includes(value)) return value;
+  }
+  return undefined;
 }
 
 /** 全部参数的默认值 */
@@ -123,6 +152,24 @@ export function sameValue(a: ParamValue | undefined, b: ParamValue | undefined):
   return ka.length === kb.length && ka.every((k) => Object.hasOwn(ob, k) && sameValue((a as Record<string, ParamValue>)[k], ob[k]));
 }
 
+type VisibleWhen = NonNullable<ParamDef['visibleWhen']>;
+type Clause = Extract<VisibleWhen, { key: string }>;
+
+function matchesParamCondition(condition: Clause, values: Readonly<Record<string, unknown>>): boolean {
+  const value = Object.hasOwn(values, condition.key) ? values[condition.key] as ParamValue | undefined : undefined;
+  return (condition.equals === undefined || sameValue(value, condition.equals)) &&
+    (condition.in === undefined || condition.in.some((item) => sameValue(value, item))) &&
+    (condition.not === undefined || !sameValue(value, condition.not));
+}
+
+export function isParamVisible(def: ParamDef, values: Readonly<ParamValues>): boolean {
+  const condition = def.visibleWhen;
+  if (!condition) return true;
+  const match = (group: Exclude<VisibleWhen, { any: unknown }>) => 'all' in group
+    ? group.all.every((clause) => matchesParamCondition(clause, values)) : matchesParamCondition(group, values);
+  return 'any' in condition ? condition.any.some(match) : match(condition);
+}
+
 /**
  * 只留下与默认值不同的参数（预设、工程文件只存这些，4.7、1.9）。
  * text 参数与任一语言的默认值相同都算“没改”。
@@ -134,9 +181,17 @@ export function diffFromDefaults(defs: readonly ParamDef[], values: Readonly<Rec
     const v = clean[def.key];
     if (def.type === 'text' && typeof def.default !== 'string') {
       const defaults = Object.values(def.default).map((t) => truncate(t ?? '', def.maxLength));
-      if (defaults.includes(v as string)) continue;
+      const keepLanguage = def.legacyText?.some(({ when }) => {
+        const discriminator = clean[when.key];
+        return typeof discriminator === 'string' && when.in.includes(discriminator);
+      });
+      if (!keepLanguage && defaults.includes(v as string)) continue;
     } else if (sameValue(v, defaultValue(def, options))) continue;
     out[def.key] = v!;
+  }
+  for (const def of defs) {
+    const legacy = readLegacyParam(def, out);
+    if (!Object.hasOwn(out, def.key) && legacy !== undefined && !sameValue(sanitizeValue(def, legacy, options), clean[def.key])) out[def.key] = clean[def.key]!;
   }
   return out;
 }

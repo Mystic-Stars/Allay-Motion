@@ -4,6 +4,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createLogger } from '../../apps/desktop/src/main/logger';
+import { ResourceService } from '../../apps/desktop/src/main/resources/service';
+import { SettingsStore } from '../../apps/desktop/src/main/settings-store';
 import {
   checkMojangUrl,
   chooseVanillaSource,
@@ -14,7 +17,8 @@ import {
   type CachedVanilla,
   type VanillaInstall,
 } from '../../apps/desktop/src/main/resources';
-import { buildZip, solidPng, tex } from './helpers/resource-fixtures';
+import type { DownloadProgressView } from '../../apps/desktop/src/shared/resources';
+import { buildZip, makeFakeMinecraft, packMcmeta, solidPng, tex, writeFiles } from './helpers/resource-fixtures';
 
 // T-AST-DL：运行时从 Mojang 下载客户端 jar。全部对着本机的假 HTTP 服务器测，不访问真实网络。
 // 假清单、假 jar（纯色测试色块）、假资源索引都由脚本生成。
@@ -138,10 +142,303 @@ function files(root: string): string[] {
 }
 
 const cacheDir = () => join(dir, 'userData', 'vanilla-cache');
+const panoramaId = (face: number) => `minecraft:gui/title/background/panorama_${face}`;
+const panoramaKey = (face: number) => `minecraft/textures/gui/title/background/panorama_${face}.png`;
+const objectPath = (bytes: Buffer) => `/${sha1(bytes).slice(0, 2)}/${sha1(bytes)}`;
+
+function servePanorama(failFace?: 'hash' | 'slow' | 'malformed') {
+  const placeholder = solidPng('#101010', 1, 1);
+  const faces = ['#ff0000', '#00ff00', '#0000ff', '#ffa000', '#a000ff', '#00ffff'].map((color) => Buffer.from(solidPng(color, 64, 64)));
+  const unrelated = Buffer.from('not a panorama');
+  const indexed = (bytes: Buffer) => ({ hash: sha1(bytes), size: bytes.length });
+  const fixture = serveFakeRelease((release) => {
+    release.jar = Buffer.from(buildZip(faces.map((_, face) => ({ name: `assets/${panoramaKey(face)}`, data: placeholder }))));
+    release.index = Buffer.from(JSON.stringify({ objects: {
+      ...Object.fromEntries(faces.map((bytes, face) => [panoramaKey(face), face === 1 && failFace === 'malformed' ? { hash: '../bad', size: bytes.length } : indexed(bytes)])),
+      [panoramaKey(6)]: indexed(unrelated),
+      'minecraft/textures/gui/title/background/panorama_overlay.png': indexed(unrelated),
+    } }));
+    Object.assign((release.version.downloads as { client: object }).client, { sha1: sha1(release.jar), size: release.jar.length });
+    Object.assign(release.version.assetIndex as object, { sha1: sha1(release.index), size: release.index.length });
+  });
+  for (const [face, bytes] of faces.entries()) {
+    const route = face === 1 && failFace === 'hash' ? Buffer.alloc(bytes.length)
+      : face === 1 && failFace === 'slow' ? { slow: [bytes.subarray(0, 8), bytes.subarray(8)], delayMs: 1_000 } : bytes;
+    routes.set(objectPath(bytes), route);
+  }
+  routes.set(objectPath(unrelated), unrelated);
+  return { fixture, faces, placeholder };
+}
+
+async function openService(onProgress: (progress: DownloadProgressView) => void = () => undefined) {
+  const userDataDir = join(dir, 'userData');
+  const logger = createLogger(null, false);
+  const settings = new SettingsStore(join(userDataDir, 'settings.json'), logger);
+  await settings.load();
+  const service = new ResourceService({
+    userDataDir, settings, log: logger, builtinDir: join(dir, 'empty'),
+    downloader: createVanillaDownloader({ cacheDir: cacheDir(), packaged: false, testOrigins: testOrigins() }),
+    gameEnv: { platform: 'win32', appData: dir, home: dir }, onChanged: (state) => {
+      if (state.download.status !== 'idle') onProgress(state.download.progress);
+    },
+  });
+  await service.init();
+  await service.detectMinecraft();
+  return service;
+}
+
+describe('T-AST-DL 全景缓存', () => {
+  it('旧缓存离线仍读 JAR；确认重下指定版补齐六面，最新入口复用全部已校验对象', async () => {
+    const { fixture, faces, placeholder } = servePanorama();
+    writeFiles(cacheDir(), { 'versions/fx-9/client.jar': fixture.jar, 'versions/fx-9/version.json': JSON.stringify(fixture.version), 'indexes/fx.json': fixture.index });
+    makeFakeMinecraft(join(dir, '.minecraft'), [{ id: 'local', releaseTime: '2020-01-01', type: 'release', jar: true }]);
+    const progress: DownloadProgressView[] = [];
+    const service = await openService((entry) => progress.push(entry));
+    try {
+      const library = service.state().library!;
+      await service.selectProfile(library.profiles.find((profile) => profile.source === 'local')!.id);
+      const downloaded = library.profiles.find((profile) => profile.source === 'downloaded')!;
+      await service.selectProfile(downloaded.id);
+      expect((await service.readTexture(panoramaId(0)))?.png).toEqual(placeholder);
+      expect((await service.readTexture(panoramaId(0), downloaded.id))?.png).toEqual(placeholder);
+      const stamp = service.state().stamp;
+      const profileStamp = service.state().library!.profiles.find(({ id }) => id === downloaded.id)?.stamp;
+      expect(log).toEqual([]);
+      expect(await service.downloadVanilla('fx-9')).toEqual({ ok: true });
+      expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path))).toEqual(faces.map(objectPath));
+      expect(log).not.toContain('/v1/objects/aaa/client.jar');
+      expect(log).not.toContain('/v1/packages/bbb/fx.json');
+      expect(service.state().stamp).not.toBe(stamp);
+      expect(service.state().library!.profiles.find(({ id }) => id === downloaded.id)?.stamp).not.toBe(profileStamp);
+      expect(progress).toContainEqual(expect.objectContaining({ stage: 'extract', activity: 'panorama' }));
+      const total = fixture.index.length + faces.reduce((sum, bytes) => sum + bytes.length, 0);
+      expect(service.state().download).toMatchObject({ status: 'done', progress: { stages: expect.arrayContaining([{ id: 'extract', status: 'done', received: total, total }]) } });
+      for (const [face, bytes] of faces.entries()) expect((await service.readTexture(panoramaId(face), downloaded.id))?.png).toEqual(new Uint8Array(bytes));
+      log.length = 0;
+      expect(await service.downloadVanilla()).toEqual({ ok: true });
+      expect(log).toEqual(['/mc/game/version_manifest_v2.json', '/v1/packages/ddd/fx-9.json']);
+    } finally { service.close(); }
+  });
+
+  it.each(['hash', 'malformed'] as const)('全景 %s 错误停在提取阶段，重试复用已经校验的对象', async (failure) => {
+    const { faces } = servePanorama(failure);
+    const service = await openService();
+    try {
+      expect(await service.downloadVanilla('fx-9')).toEqual({ ok: false, error: 'verify' });
+      expect(service.state().download).toMatchObject({ status: 'failed', progress: { stage: 'extract', activity: 'panorama' }, requestedVersion: 'fx-9' });
+      expect(files(cacheDir()).some((path) => path.endsWith('.part') || path.endsWith('version.json'))).toBe(false);
+      if (failure === 'malformed') expect(log).not.toContain(objectPath(faces[0]!));
+      if (failure === 'hash') {
+        routes.set(objectPath(faces[1]!), faces[1]!);
+        log.length = 0;
+        expect(await service.downloadVanilla()).toEqual({ ok: true });
+        expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path))).toEqual(faces.slice(1).map(objectPath));
+      }
+    } finally { service.close(); }
+  });
+
+  it('取消进行中的全景请求，保留已校验对象并清除半成品', async () => {
+    const { faces } = servePanorama('slow');
+    const service = await openService();
+    try {
+      const download = service.downloadVanilla('fx-9');
+      await expect.poll(() => log.includes(objectPath(faces[1]!))).toBe(true);
+      service.cancelDownload();
+      expect(await download).toEqual({ canceled: true });
+      expect(service.state().download).toMatchObject({ status: 'canceled', progress: { stage: 'extract', activity: 'panorama' } });
+      expect(files(cacheDir())).toContain(`objects${objectPath(faces[0]!)}`);
+      expect(files(cacheDir()).some((path) => path.endsWith('.part') || path.endsWith('version.json'))).toBe(false);
+      expect(log).not.toContain(objectPath(faces[2]!));
+    } finally { service.close(); }
+  });
+
+  it('旧版本没有索引全景时不发对象请求，保留 JAR 自带贴图', async () => {
+    const png = solidPng('#aabbcc', 64, 64);
+    serveFakeRelease((release) => {
+      release.jar = Buffer.from(buildZip([{ name: `assets/${panoramaKey(0)}`, data: png }]));
+      Object.assign((release.version.downloads as { client: object }).client, { sha1: sha1(release.jar), size: release.jar.length });
+    });
+    const service = await openService();
+    try {
+      expect(await service.downloadVanilla()).toEqual({ ok: true });
+      expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path))).toEqual([]);
+      expect((await service.readTexture(panoramaId(0)))?.png).toEqual(png);
+    } finally { service.close(); }
+  });
+});
+
+describe('T-AST-DL 同版索引里的 Unihex 字体', () => {
+  const main = 'minecraft/font/include/unifont.json';
+  const pua = 'minecraft/font/include/unifont_pua.json';
+  const normal = 'minecraft/font/unifont.zip';
+  const japanese = 'minecraft/font/unifont_jp.zip';
+  const privateUse = 'minecraft/font/unifont_pua.zip';
+  const defaultFont = 'minecraft:default';
+  const glyph = (cp: string, row: string) => Buffer.from(buildZip([{ name: 'synthetic.hex', data: `${cp}:${row.repeat(16)}` }]));
+  const font = (archive: string) => ({ type: 'unihex', hex_file: `minecraft:font/${archive}.zip` });
+  const jarPlaceholder = JSON.stringify({ providers: [] });
+  const describeObject = (bytes: Buffer) => ({ hash: sha1(bytes), size: bytes.length });
+  const json = (providers: unknown[]) => Buffer.from(JSON.stringify({ providers }));
+
+  function serveFonts(variant: 'modern' | 'oversize' | 'bad-hash' = 'modern') {
+    const objects = {
+      [main]: json([font('unifont'), font('unifont_jp'), { type: 'reference', id: 'minecraft:include/unifont_pua' }]),
+      [pua]: json([font('unifont_pua')]),
+      [normal]: glyph('4E2D', '44'),
+      [japanese]: glyph('3042', '24'),
+      [privateUse]: glyph('E001', '60'),
+    };
+    const unrelated = Buffer.from('不在允许列表内');
+    const fixture = serveFakeRelease((release) => {
+      release.jar = Buffer.from(buildZip([
+        { name: 'assets/minecraft/font/default.json', data: json([{ type: 'reference', id: 'minecraft:include/unifont' }]) },
+        { name: `assets/${main}`, data: jarPlaceholder },
+      ]));
+      release.index = Buffer.from(JSON.stringify({ objects: {
+        ...Object.fromEntries(Object.entries(objects).map(([key, bytes]) => [key, describeObject(bytes)])),
+        ...(variant === 'oversize' ? { [normal]: { hash: sha1(objects[normal]!), size: 8 * 1024 * 1024 + 1 } } : {}),
+        'minecraft/font/unifont_extra.zip': describeObject(unrelated),
+        'minecraft/font/include/other.json': describeObject(unrelated),
+        'minecraft/font/../danger.zip': describeObject(unrelated),
+      } }));
+      Object.assign((release.version.downloads as { client: object }).client, { size: release.jar.length, sha1: sha1(release.jar) });
+      Object.assign(release.version.assetIndex as object, { size: release.index.length, sha1: sha1(release.index) });
+    });
+    for (const bytes of Object.values(objects)) routes.set(objectPath(bytes), bytes);
+    if (variant === 'bad-hash') routes.set(objectPath(objects[normal]!), Buffer.alloc(objects[normal]!.length));
+    routes.set(objectPath(unrelated), unrelated);
+    return { fixture, objects, unrelated };
+  }
+
+  it('同名空 JAR 定义优先补成同版索引定义；本机和资源包仍可覆盖，缺损时不联网', async () => {
+    const { fixture, objects, unrelated } = serveFonts();
+    writeFiles(cacheDir(), { 'versions/fx-9/client.jar': fixture.jar, 'versions/fx-9/version.json': JSON.stringify(fixture.version), 'indexes/fx.json': fixture.index });
+    const localGlyph = glyph('4E2D', '28');
+    const localDef = json([font('unifont')]);
+    const localIndex = Buffer.from(JSON.stringify({ objects: { [main]: describeObject(localDef), [normal]: describeObject(localGlyph) } }));
+    const game = join(dir, '.minecraft');
+    writeFiles(game, {
+      'versions/fx-9/fx-9.jar': fixture.jar,
+      'versions/fx-9/fx-9.json': JSON.stringify({ ...fixture.version, assetIndex: { id: 'fx', sha1: sha1(localIndex), size: localIndex.length } }),
+      'assets/indexes/fx.json': localIndex,
+      [`assets/objects${objectPath(localDef)}`]: localDef,
+      [`assets/objects${objectPath(localGlyph)}`]: localGlyph,
+    });
+
+    const progress: DownloadProgressView[] = [];
+    const service = await openService((entry) => progress.push(entry));
+    const glyphs = async (profile?: string) => (await service.fontProviders(defaultFont, profile))?.providers.flatMap((provider) =>
+      provider.type === 'unihex' ? [...provider.tables.codepoints] : []);
+    try {
+      const profiles = service.state().library!.profiles;
+      const local = profiles.find(({ source }) => source === 'local')!;
+      const cached = profiles.find(({ source }) => source === 'downloaded')!;
+      await service.selectProfile(local.id);
+      expect(await glyphs()).toEqual([0x4e2d]);
+      await service.selectProfile(cached.id);
+      expect(await glyphs()).toEqual([]);
+      expect(log).toEqual([]);
+
+      const before = service.state().stamp;
+      expect(await service.downloadVanilla('fx-9')).toEqual({ ok: true });
+      expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path)).sort()).toEqual(Object.values(objects).map(objectPath).sort());
+      expect(log).not.toContain(objectPath(unrelated));
+      expect(log).not.toContain('/v1/objects/aaa/client.jar');
+      expect(log).not.toContain('/v1/packages/bbb/fx.json');
+      expect(service.state().stamp).not.toBe(before);
+      expect(await glyphs()).toEqual([0x4e2d, 0x3042, 0xe001]);
+      expect(await glyphs(local.id)).toEqual([0x4e2d]);
+      expect(progress).toContainEqual(expect.objectContaining({ stage: 'extract', activity: 'fonts' }));
+      const total = fixture.index.length + Object.values(objects).reduce((sum, bytes) => sum + bytes.length, 0);
+      expect(service.state().download).toMatchObject({ status: 'done', progress: { stages: expect.arrayContaining([{ id: 'extract', status: 'done', received: total, total }]) } });
+
+      log.length = 0;
+      const pack = join(dir, 'Font Overlay.zip');
+      writeFiles(dir, { 'Font Overlay.zip': buildZip([
+        { name: 'pack.mcmeta', data: packMcmeta('合成字体覆盖') },
+        { name: `assets/${normal}`, data: glyph('4E8C', '80') },
+        { name: `assets/${main}`, data: json([{ type: 'space', advances: { ' ': 7 } }]) },
+      ]) });
+      expect(await service.addPackFromPath(pack)).toMatchObject({ ok: true });
+      expect((await service.fontProviders(defaultFont))?.providers[0]).toEqual({ type: 'space', advances: [[' '.codePointAt(0), 7]] });
+      expect(await glyphs()).toEqual([0x4e8c, 0x3042, 0xe001]);
+      await service.removeLayer(service.state().layers.find(({ kind }) => kind === 'pack')!.id);
+
+      const archivePath = `objects${objectPath(objects[normal]!)}`;
+      writeFiles(cacheDir(), { [archivePath]: Buffer.alloc(objects[normal]!.length) });
+      expect(await glyphs()).toEqual([0x3042, 0xe001]);
+      expect((await service.fontProviders(defaultFont))?.skipped).toContain(`undecodable(assets/${normal})`);
+      rmSync(join(cacheDir(), `objects${objectPath(objects[main]!)}`));
+      expect(await glyphs()).toEqual([]);
+      expect(await glyphs(local.id)).toEqual([0x4e2d]);
+      expect(log).toEqual([]);
+
+      expect(await service.downloadVanilla('fx-9')).toEqual({ ok: true });
+      expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path))).toEqual([objectPath(objects[main]!), objectPath(objects[normal]!)]);
+      expect(await glyphs()).toEqual([0x4e2d, 0x3042, 0xe001]);
+    } finally { service.close(); }
+  });
+
+  it.each(['oversize', 'bad-hash'] as const)('索引字体 %s 不能进入下载缓存', async (variant) => {
+    const { objects } = serveFonts(variant);
+    const service = await openService();
+    try {
+      expect(await service.downloadVanilla('fx-9')).toEqual({ ok: false, error: 'verify' });
+      expect(service.state().download).toMatchObject({ status: 'failed', progress: { stage: 'extract', activity: 'fonts' } });
+      const saved = files(cacheDir());
+      expect(saved).not.toContain(`objects${objectPath(objects[normal]!)}`);
+      expect(saved.some((path) => path.endsWith('.part') || path.endsWith('version.json'))).toBe(false);
+      if (variant === 'oversize') expect(log.filter((path) => /^\/[\da-f]{2}\//.test(path))).toEqual([]);
+    } finally { service.close(); }
+  });
+
+  it('同名索引的哈希、大小或所在目录不符时，离线读取不会覆盖 JAR', async () => {
+    const { fixture, objects } = serveFonts();
+    const game = join(dir, 'version');
+    writeFiles(game, { 'client.jar': fixture.jar, 'index.json': fixture.index, [`objects${objectPath(objects[main]!)}`]: objects[main]! });
+    writeFiles(dir, { 'outside-index.json': fixture.index });
+    const install: VanillaInstall = {
+      gameDir: game, versionId: 'fx-9', releaseTime: '2030-01-01', jarPath: join(game, 'client.jar'),
+      assetIndexPath: join(game, 'index.json'), assetIndexSha1: sha1(fixture.index), assetIndexSize: fixture.index.length,
+      objectsDir: join(game, 'objects'),
+    };
+    for (const mismatch of [{ assetIndexSha1: '0'.repeat(40) }, { assetIndexSize: 1 }, { assetIndexPath: join(dir, 'outside-index.json') }]) {
+      const layer = await openVanillaLayer({ ...install, ...mismatch });
+      try {
+        expect(new TextDecoder().decode((await layer.read(`assets/${main}`))!)).toBe(jarPlaceholder);
+        expect(await layer.remoteObject?.(`assets/${normal}`)).toBeNull();
+      } finally { layer.close(); }
+    }
+    expect(log).toEqual([]);
+  });
+});
 
 describe('T-AST-DL 运行时下载客户端 jar', () => {
+  it('T-AST-DL 指定正式版：与最新版本并存，同 ID 的不同资源索引不会覆盖', async () => {
+    const latest = serveFakeRelease();
+    const olderIndex = Buffer.from('{"objects":{}}');
+    const older = Buffer.from(JSON.stringify({ ...latest.version, id: '1.21.11', releaseTime: '2025-12-09', assetIndex: {
+      id: 'fx', url: 'https://piston-meta.mojang.com/older-index.json', sha1: sha1(olderIndex), size: olderIndex.byteLength,
+    } }));
+    const currentManifest = routes.get('/mc/game/version_manifest_v2.json');
+    if (!Buffer.isBuffer(currentManifest)) throw new Error('missing fixture manifest');
+    const original = JSON.parse(currentManifest.toString()) as { latest: { release: string }; versions: unknown[] };
+    routes.set('/mc/game/version_manifest_v2.json', Buffer.from(JSON.stringify({ ...original, versions: [
+      ...original.versions, { id: '1.21.11', type: 'release', url: 'https://piston-meta.mojang.com/older-version.json', sha1: sha1(older) },
+    ] })));
+    routes.set('/older-version.json', older);
+    routes.set('/older-index.json', olderIndex);
+    const dl = createVanillaDownloader({ cacheDir: cacheDir(), packaged: false, testOrigins: testOrigins() });
+    expect((await dl.listOfficialReleases()).map((entry) => entry.versionId)).toEqual(['fx-9', '1.21.11']);
+    expect(await dl.downloadRelease('1.21.11')).toMatchObject({ versionId: '1.21.11' });
+    await expect(dl.downloadRelease('fx-10-snap')).rejects.toMatchObject({ code: 'bad-data' });
+    await dl.downloadLatest();
+    const requests = log.length;
+    expect((await dl.listCached()).map((entry) => entry.versionId)).toEqual(['fx-9', '1.21.11']);
+    expect(log).toHaveLength(requests);
+  });
   it('T-AST-DL-1 正常下载：清单 → 最新正式版 → jar 与资源索引校验通过，资源对象按需取', async () => {
-    serveFakeRelease();
+    const fixture = serveFakeRelease();
     const dl = createVanillaDownloader({ cacheDir: cacheDir(), packaged: false, testOrigins: testOrigins() });
     expect(await dl.findCached()).toBeNull();
     const phases = new Set<string>();
@@ -150,7 +447,7 @@ describe('T-AST-DL 运行时下载客户端 jar', () => {
     expect(phases).toEqual(new Set(['manifest', 'version', 'jar', 'index']));
     // 每次上报都能过 schema（DownloadTracker 只收合法的）
 
-    expect(files(cacheDir())).toEqual(['indexes/fx.json', 'versions/fx-9/client.jar', 'versions/fx-9/version.json']);
+    expect(files(cacheDir())).toEqual([`indexes/fx-${sha1(fixture.index)}.json`, 'versions/fx-9/client.jar', 'versions/fx-9/version.json']);
     // 下载缓存当作原版层打开；音效对象不在本地，按需取
     const layer = await openVanillaLayer(got, { fetchObject: (h, s) => dl.fetchObject(h, s) });
     try {

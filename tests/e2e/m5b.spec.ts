@@ -389,6 +389,8 @@ test.describe('启动画面（7.5 第 1 项、7.6 C）', () => {
       const facts = await splash.evaluate(async () => ({
         wordmark: document.querySelector('.wordmark')?.textContent ?? null,
         disclaimer: document.querySelector('[data-testid="splash-disclaimer"]')?.textContent ?? null,
+        font: getComputedStyle(document.body).fontFamily,
+        fontFaces: document.fonts.size,
         // 没有脚本、拿不到 Node
         scripts: document.scripts.length,
         require: typeof (globalThis as { require?: unknown }).require,
@@ -400,6 +402,7 @@ test.describe('启动画面（7.5 第 1 项、7.6 C）', () => {
       const brand = brandMessages['zh-CN'];
       expect(facts.wordmark).toBe(brand.wordmark);
       expect(facts.disclaimer).toBe(brand.disclaimer);
+      expect([facts.font, facts.fontFaces]).toEqual(['system-ui, sans-serif', 0]);
       expect([facts.scripts, facts.require, facts.process]).toEqual([0, 'undefined', 'undefined']);
       expect(facts.background).toContain('/mascot/allay-288.png');
       expect(facts.atlasOk).toBe(true);
@@ -426,6 +429,7 @@ test.describe('启动画面（7.5 第 1 项、7.6 C）', () => {
       await expect(splash.locator('.sprite')).toBeHidden();
       // 静态：任何元素都没有动画
       expect(await splash.evaluate(() => document.getAnimations().length)).toBe(0);
+      expect(await splash.evaluate(() => [getComputedStyle(document.body).fontFamily, document.fonts.size])).toEqual(['system-ui, sans-serif', 0]);
       await expect(splash.getByTestId('splash-disclaimer')).toHaveText(brandMessages.en.disclaimer);
     } finally {
       await app.close();

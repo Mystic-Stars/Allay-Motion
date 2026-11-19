@@ -23,10 +23,11 @@ describe('M8 第三方许可清单', () => {
   });
 
   it('许可原文都在，或者指向随包附带的文件', () => {
+    expect(file.entries.some((entry) => entry.name === 'Ark Pixel Font')).toBe(false);
     const noText = file.entries.filter((e) => !e.text && !e.seeFile).map((e) => e.name);
     // 少数包里没有许可文件（package.json 声明了 MIT）；清单里照实写“包里没有许可文件”
     expect(noText.length).toBeLessThan(5);
-    for (const name of ['FFmpeg', 'electron', 'Ark Pixel Font', 'three', 'react', 'tailwindcss']) expect(file.entries.some((e) => e.name === name)).toBe(true);
+    for (const name of ['FFmpeg', 'electron', 'three', 'react', 'tailwindcss']) expect(file.entries.some((e) => e.name === name)).toBe(true);
   });
 
   it('FFmpeg 的来源与 pnpm ffmpeg:fetch 固定的构建一致', () => {

@@ -54,16 +54,26 @@
 
 用户决定（2026-11-13）：代码放在公开仓库 `Mystic-Stars/Allay-Motion`，安装包由 GitHub Actions 构建（`.github/workflows/release.yml`）。
 
-- 推 `v*` 标签：同时构建 Windows 的 NSIS 安装包（x64）和 macOS 的 dmg、zip（arm64、x64 各一份），上传工作流产物；三份都成功后创建临时草稿，挂上全部安装包和一份合并的 `SHA256SUMS.txt`，随后自动正式发布。任何一份构建、检查或上传失败时不会公开。
-- 手动触发只构建并上传工作流产物，不发布 Release。正式发布后，另一个工作流把发行版和全部附件同步到 GitCode，详见 `docs/gitcode-mirror.md`。
+- 只有具备现有 GitHub 标签权限的维护者推送 `v*` 标签才会公开 Release，分支推送和标签删除都不会。发版同时构建 Windows 的 NSIS 安装包（x64）和 macOS 的 dmg、zip（arm64、x64 各一份）；三份都成功后创建临时草稿，挂上全部安装包和一份合并的 `SHA256SUMS.txt`，随后自动公开。任何一份构建、检查或上传失败时不会公开。
+- 手动触发只构建并上传工作流产物，不发布 Release。Release 公开后，另一个工作流把发行版和全部附件同步到 GitCode，详见 `docs/gitcode-mirror.md`。
 - v0.1.0 的公开发布和此后的自动发布由仓库所有者决定；★ 项是否确认仍以本表为准，自动发布不代表它们已确认。
 - 安装包没有代码签名（macOS 只有 ad-hoc 签名、没有公证），工作流里也没有任何证书或密钥。
-- 0.1.2 起应用内有自动更新：读最新正式版的安装包和 `SHA256SUMS.txt`，所以**附件的文件名格式和 `SHA256SUMS.txt` 不能随意改**（`apps/desktop/src/shared/updates.ts` 按文件名挑安装包）。GitCode 的附件同步完之前，国内用户会退回从 GitHub 下载。
+- 0.1.2 起应用内有自动更新。**附件的文件名格式和 `SHA256SUMS.txt` 不能随意改**（`apps/desktop/src/shared/updates.ts` 按文件名挑安装包）。GitCode 的附件同步完之前，国内用户会退回从 GitHub 下载。
 - 分支推送和 PR 上的 CI（`.github/workflows/ci.yml`）默认跑一遍 `pnpm check`；`pnpm check:removable` 在手动运行 CI 时按需勾选。macOS 不在日常 CI 里：发版工作流的两个 macOS 构建编译 FFmpeg、跑 `pnpm test:export` 和 `pnpm dist`。发版工作流里的 `pnpm dist` 跑打包后的检查；T-ARC-7 在 CI 的共享机器上只记数字、不按预算判定（不是参考机器）。
+
+更新渠道由标签决定，与分支名无关：
+
+| 渠道 | 标签 | Release |
+|---|---|---|
+| Codex | `vX.Y.Z-codex.N` | 预发布，不设为 latest |
+| main | `vX.Y.Z` | 正式版，可成为 latest |
+| dev | `vX.Y.Z-dev.N` | 预发布，不设为 latest |
+
+`beta`、`rc` 等其他 SemVer 预发布仍可公开，但不设为 latest，也不属于这三个渠道。
 
 发版操作：
 
-1. 确认 `main` 上 CI 全绿，发版工作流跑通。
+1. 确认待打标签的提交上 CI 全绿，发版工作流跑通。
 2. 按 H-SIGN 的决定签名（或明确以“未签名”发布并在 Release 页说明；macOS 的“未公证、首次打开怎么放行”工作流写的 Release 说明里已经有）。
 3. Release 页带 9.5 的非官方声明（中英文；工作流写的草稿说明里已经有）。
-4. 更新 `CHANGELOG.md` 的版本和日期，推 `v<版本>` 标签，查看 Actions 的发布及 GitCode 同步结果。
+4. 先更新 `apps/desktop/package.json` 的 `version`（标签去掉开头的 `v`，保留完整的预发布后缀）和 `CHANGELOG.md` 的版本与日期。由已有权限的维护者在包含这些改动的提交上打标签并推送，查看 Actions 的发布及 GitCode 同步结果。版本不一致时，标签构建会在打包前失败，而不是改写版本。

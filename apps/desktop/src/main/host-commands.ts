@@ -28,7 +28,7 @@ export class HostCommandChannel {
    * 请界面执行命令 id（参数经界面的命令层校验）。永远 resolve，不抛错。
    * timeoutMs：这一次的时限（缺省 15 秒）；会等用户回答的命令（文件关联时“放弃未保存的改动？”，M8）给长一些
    */
-  run(command: string, input?: unknown, opts: { timeoutMs?: number } = {}): Promise<HostCommandOutcome> {
+  run(command: string, input?: unknown, opts: { timeoutMs?: number; source?: HostCommandRequest['source'] } = {}): Promise<HostCommandOutcome> {
     if (!HostCommandIdSchema.safeParse(command).success) return Promise.resolve({ ok: false, error: 'unknown-command', message: 'bad command id' });
     const requestId = randomUUID();
     return new Promise<HostCommandOutcome>((resolve) => {
@@ -40,7 +40,7 @@ export class HostCommandChannel {
       this.pending.set(requestId, { resolve, timer });
       let sent = false;
       try {
-        sent = this.opts.send(input === undefined ? { requestId, command } : { requestId, command, input: input as HostCommandRequest['input'] });
+        sent = this.opts.send({ requestId, command, ...(opts.source && { source: opts.source }), ...(input !== undefined && { input: input as HostCommandRequest['input'] }) });
       } catch (error) {
         this.opts.log.warn('host-commands', 'send failed', { command, error: String(error) });
       }

@@ -6,7 +6,7 @@ import type { TemplateBundle, TemplateEntry } from '../../../desktop/src/shared/
 
 interface Builtin {
   entry: TemplateEntry;
-  code: string;
+  code: () => Promise<string>;
 }
 
 function load(): Builtin[] {
@@ -35,10 +35,10 @@ export function builtinEntries(): TemplateEntry[] {
   return all().map((b) => b.entry);
 }
 
-export function builtinBundle(id: string, version: string): TemplateBundle | null {
+export async function builtinBundle(id: string, version: string): Promise<TemplateBundle | null> {
   const b = all().find((x) => x.entry.id === id && x.entry.version === version);
   if (!b) return null;
-  return { entry: b.entry, resolved: resolveScript(b.entry.manifest), code: b.code };
+  return { entry: b.entry, resolved: resolveScript(b.entry.manifest), code: await b.code() };
 }
 
 /** 模板的默认时长：timeline 各段默认值之和（模板库卡片上的读数，6.4）；不知道时为 null */

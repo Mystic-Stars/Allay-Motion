@@ -21,10 +21,26 @@
       "key": "blocks",
       "type": "blockList",
       "label": { "zh-CN": "方块", "en": "Blocks" },
-      "hint": { "zh-CN": "按权重随机分配到每个格子", "en": "Assigned to cells at random by weight" },
+      "hint": { "zh-CN": "拖动调整方块顺序；权重为 0 的方块不参与分布", "en": "Drag to reorder. Blocks with zero weight are skipped." },
       "group": "blocks",
       "default": [{ "id": "minecraft:diamond_block", "weight": 1 }],
       "max": 8
+    },
+    {
+      "key": "materialDistribution",
+      "type": "enum",
+      "label": { "zh-CN": "材质分布", "en": "Material distribution" },
+      "hint": { "zh-CN": "只改变格子的材质，不改变动画顺序。至少两种有效方块才看得出区别；有序布局按列表顺序，忽略非零权重大小。", "en": "Changes materials, not animation order. Use at least two distinct active blocks to see a difference. Ordered layouts use list order, not positive weight magnitudes." },
+      "group": "blocks",
+      "default": "weightedRandom",
+      "options": [
+        { "value": "weightedRandom", "label": { "zh-CN": "加权随机", "en": "Weighted random" } },
+        { "value": "horizontalStripes", "label": { "zh-CN": "横条纹", "en": "Horizontal stripes" } },
+        { "value": "verticalStripes", "label": { "zh-CN": "竖条纹", "en": "Vertical stripes" } },
+        { "value": "cyclic", "label": { "zh-CN": "逐格循环", "en": "Cell cycle" } },
+        { "value": "checker", "label": { "zh-CN": "棋盘格", "en": "Checker" } },
+        { "value": "diagonal", "label": { "zh-CN": "斜条纹", "en": "Diagonal stripes" } }
+      ]
     },
     { "key": "cols", "type": "integer", "label": { "zh-CN": "列数", "en": "Columns" }, "group": "blocks", "default": 12, "min": 4, "max": 40, "ui": "slider" },
     {
@@ -34,7 +50,7 @@
       "group": "blocks",
       "default": "3d",
       "options": [
-        { "value": "flat", "label": { "zh-CN": "平面", "en": "Flat" } },
+        { "value": "flat", "label": { "zh-CN": "正交（无面明暗）", "en": "Orthographic (unshaded)" } },
         { "value": "3d", "label": { "zh-CN": "立体", "en": "3D" } }
       ]
     },
@@ -84,7 +100,7 @@
       "key": "overlap",
       "type": "number",
       "label": { "zh-CN": "重叠", "en": "Overlap" },
-      "hint": { "zh-CN": "单个方块的动画占整个阶段的比例", "en": "Share of the phase each block spends animating" },
+      "hint": { "zh-CN": "单个方块的动画占整个阶段的比例。设为 1 时所有方块同时动作，不再错开。", "en": "Share of the phase each block spends animating. At 1, all blocks move together without staggering." },
       "group": "motion",
       "default": 0.45,
       "min": 0.1,
@@ -110,6 +126,9 @@
     { "key": "placeSound", "type": "sound", "label": { "zh-CN": "放置音效", "en": "Place sound" }, "group": "sound", "default": "minecraft:block.stone.place" },
     { "key": "breakSound", "type": "sound", "label": { "zh-CN": "破坏音效", "en": "Break sound" }, "group": "sound", "default": "minecraft:block.stone.break" },
     { "key": "volume", "type": "number", "label": { "zh-CN": "音量", "en": "Volume" }, "group": "sound", "default": 0.6, "min": 0, "max": 1, "step": 0.01, "ui": "slider" },
+    { "key": "spatialAudio", "type": "boolean", "label": { "zh-CN": "空间音效", "en": "Spatial sound" }, "group": "sound", "default": false },
+    { "key": "music", "type": "sound", "label": { "zh-CN": "背景音乐", "en": "Background music" }, "group": "sound", "default": null },
+    { "key": "musicVolume", "type": "number", "label": { "zh-CN": "音乐音量", "en": "Music volume" }, "group": "sound", "default": 0.5, "min": 0, "max": 1, "step": 0.01, "ui": "slider", "visibleWhen": { "key": "music", "not": null } },
     { "key": "seed", "type": "seed", "label": { "zh-CN": "随机种子", "en": "Seed" }, "group": "motion", "default": 1 }
   ],
   "timeline": {
