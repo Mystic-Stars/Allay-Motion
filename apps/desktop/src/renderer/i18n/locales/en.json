@@ -838,8 +838,7 @@
       "missingChinese": "Chinese name missing",
       "downloadNames": "Get Chinese names from Mojang",
       "downloadNamesFailed": "Could not get the vanilla Chinese names.",
-      "variants_one": "{{count}} variant",
-      "variants_other": "{{count}} variants",
+      "variants": "{{count}} variants",
       "kind": { "effect": "Sound effects", "music": "Music" },
       "source": { "vanilla": "Vanilla", "pack-new": "Added by pack", "definition-override": "Event definition overridden", "file-override": "Same-name audio replaced", "builtin": "Built-in", "imported": "Imported" }
     },

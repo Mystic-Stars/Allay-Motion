@@ -838,7 +838,7 @@
       "missingChinese": "缺少中文名称",
       "downloadNames": "从 Mojang 取回中文名称",
       "downloadNamesFailed": "未能取回原版中文名称。",
-      "variants_other": "{{count}} 个变体",
+      "variants": "{{count}} 个变体",
       "kind": { "effect": "音效", "music": "音乐" },
       "source": { "vanilla": "原版", "pack-new": "资源包新增", "definition-override": "事件定义覆盖", "file-override": "同名音频覆盖", "builtin": "内置", "imported": "本地导入" }
     },
