@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Frame, type Page } from '@playwright/test';
 import { brandMessages } from '../../packages/ui/src/brand/messages';
+import { isSoftwareRenderer } from '../engine/software';
 import { catalogIds } from '../fixtures/builtin-catalog';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -362,11 +363,18 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
   const { page } = s;
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await expect(page.getByTestId('hero-viewer')).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
+  const renderer = await page.getByTestId('world').evaluate((element) => {
+    const gl = (element as HTMLCanvasElement).getContext('webgl2');
+    if (!gl) return 'none';
+    const extension = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  });
+  const settleTimeout = isSoftwareRenderer(renderer) ? 20_000 : 3_000;
   /** 页面上所有带 data-motion 的段落（首屏到分镜的主视觉、剪辑点、导航的播放头）都已落到终态 */
   const allSettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].every((e) => e.dataset.settled === 'true'));
   const unsettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].filter((e) => e.dataset.settled !== 'true').map((e) => e.dataset.motion));
   await page.mouse.move(700, 450);
-  // 滚轮：每次 100 px、间隔 250 ms，每滚 4 格停一下；停手 2 秒后检查，并给弹簧相机最多 3 秒落定
+  // 滚轮：每次 100 px、间隔 250 ms，每滚 4 格停一下；停手 2 秒后检查，软件渲染器按其实际帧节奏等待相机落定
   const total = await page.evaluate(() => document.documentElement.scrollHeight);
   let y = 0;
   for (let i = 1; y < total * 0.55; i++) {
@@ -374,7 +382,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
     await page.waitForTimeout(250);
     if (i % 4 === 0) {
       await page.waitForTimeout(2000);
-      await expect.poll(() => unsettled(), { timeout: 3000, message: `scrollY ${y}` }).toEqual([]);
+      await expect.poll(() => unsettled(), { timeout: settleTimeout, message: `scrollY ${y}` }).toEqual([]);
     }
     y = await page.evaluate(() => window.scrollY);
   }
@@ -385,7 +393,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
     await page.keyboard.press('PageDown');
     await page.waitForTimeout(80);
   }
-  await expect.poll(allSettled, { timeout: 10_000 }).toBe(true);
+  await expect.poll(allSettled, { timeout: settleTimeout }).toBe(true);
   // 导航锚点跳转（从页首直接跳到模板一节，越过分镜和剪辑点）：落到终态，剪辑点是“播完”而不是在播
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await page.waitForTimeout(2000);
@@ -401,7 +409,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
       { timeout: 6000 },
     )
     .toBe(true);
-  await expect.poll(allSettled, { timeout: 10_000 }).toBe(true);
+  await expect.poll(allSettled, { timeout: settleTimeout }).toBe(true);
   expect(await cutState(page)).toBe('done');
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
 });
