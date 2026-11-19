@@ -318,7 +318,8 @@ describe('模板开发模式：复制内置模板、写类型定义、打开文�
     renameSync(dir, outside);
     symlinkSync(outside, dir, 'junction');
     expect(await dev.writeDevFiles({ id: r.entry.id, version: '1.0.0' })).toEqual({ ok: false, error: 'outside' });
-    expect(await dev.openFolder({ id: r.entry.id, version: '1.0.0' })).toEqual({ ok: false, error: 'outside' });
+    // 写入拒绝后，监视器可能先发现坏联接并移除该模板；两种情况下都必须安全拒绝。
+    expect(await dev.openFolder({ id: r.entry.id, version: '1.0.0' })).toMatchObject({ ok: false, error: expect.stringMatching(/^(outside|not-user)$/) });
     expect(opened).toEqual([]);
   });
 
