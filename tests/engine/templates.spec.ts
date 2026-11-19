@@ -115,7 +115,7 @@ test('T-TPL-4 T1–T6 各 50 组随机合法参数：不抛错，三条断言仍
       const quality: FrameQuality = { subframes: [1, 2, 4, 8, 16][Math.floor(r() * 5)]!, shutterAngle: k % 5 === 0 ? 360 : Math.floor(r() * 361) };
       const output = { width: aspect.width * scale, height: aspect.height * scale, fps };
       const where = `${id} #${k} ${aspect.name} ${fps}fps N=${quality.subframes} A=${quality.shutterAngle} ${JSON.stringify(params)}`;
-      const res = await call('tplCheck', id, output, quality, params, true);
+      const res = await call('tplCheck', id, output, quality, params, 'sample');
       expect(res.duration, where).toBeGreaterThanOrEqual(DURATION_RANGE[0]);
       expect(res.duration, where).toBeLessThanOrEqual(DURATION_RANGE[1]);
       expect(res.warnings, where).toEqual([]);

@@ -167,9 +167,15 @@ test('T-EXP-4 空间声道能量、距离和裁切：预览调度与导出使用
   expect(right.left.live).toBeCloseTo(0, 5);
   expect(right.right.live / left.left.live).toBeCloseTo(0.25, 5);
   expect(music.right.live).toBeCloseTo(music.left.live, 5);
+  // 预览统计 Float32，而导出先编码成 PCM16；比较能量时按半个 PCM16 LSB 的量化误差给出 Cauchy 上界。
+  const pcmEnergyTolerance = (energy: number, samples: number) => {
+    const quantum = 0.5 / 32_767;
+    return 2 * quantum * Math.sqrt(samples * energy) + samples * quantum ** 2;
+  };
   for (const result of [left, right, music]) {
-    expect(result.left.live).toBeCloseTo(result.left.offline, 2);
-    expect(result.right.live).toBeCloseTo(result.right.offline, 2);
+    for (const channel of [result.left, result.right]) {
+      expect(Math.abs(channel.live - channel.offline)).toBeLessThanOrEqual(pcmEnergyTolerance(channel.live, 4_000));
+    }
     expect(result.tail).toBeCloseTo(0, 5);
   }
 });

@@ -166,9 +166,9 @@ const harness = {
 
   /**
    * T-TPL-3/4：装载一个模板，返回 warnings、时长、剪辑点，首帧、剪辑点那一帧（round(cutTime × fps)）、末帧的 alpha 极值。
-   * hashes 为真时另做 T-ENG-1：全部帧顺序渲染一遍、在另一个 Worker 里乱序渲染一遍，逐帧比较 SHA-256。
+   * hashes 为 true 时另做 T-ENG-1 全帧检查；为 sample 时只在首帧、剪辑帧、末帧间跨 Worker 逆序抽样。
    */
-  async tplCheck(name: TemplateKey, output: OutputSettings, quality: FrameQuality, params: ParamValues, hashes: boolean, fixtures?: { missing?: string[] }) {
+  async tplCheck(name: TemplateKey, output: OutputSettings, quality: FrameQuality, params: ParamValues, hashes: boolean | 'sample', fixtures?: { missing?: string[] }) {
     const { host, loaded, requestedTextures } = await exportEngine(name, output, params, undefined, fixtures);
     try {
       const total = frameCount(loaded.duration, output.fps);
@@ -182,7 +182,7 @@ const harness = {
       let mismatched: number[] = [];
       // 不一致时的诊断：两个 Worker 各重渲染一次，看是哪一边、差多少（docs/decisions.md M3“引擎里两处确定性问题”）
       const debug: unknown[] = [];
-      if (hashes) {
+      if (hashes === true) {
         const seq: string[] = [];
         for (let i = 0; i < total; i++) seq.push(await sha256(await host.renderFrame(i, quality)));
         const other = await exportEngine(name, output, params, undefined, fixtures);
@@ -211,6 +211,22 @@ const harness = {
           other.host.dispose();
         }
         distinct = new Set(seq).size;
+      } else if (hashes === 'sample') {
+        // 随机参数验收关注模板能否装载及三个关键时点。这里用跨 Worker 的逆序样本检查确定性；
+        // T-TPL-3 已对每款模板完整验证全部帧，不在每组随机参数上再次渲染整段动画。
+        const indices = [...new Set([0, cutIndex ?? Math.floor(total / 2), total - 1])];
+        const expected = new Map<number, string>();
+        for (const index of indices) expected.set(index, await sha256(await host.renderFrame(index, quality)));
+        const other = await exportEngine(name, output, params, undefined, fixtures);
+        try {
+          const actual = new Map<number, string>();
+          for (const index of [...indices].reverse()) actual.set(index, await sha256(await other.host.renderFrame(index, quality)));
+          mismatched = indices.filter((index) => expected.get(index) !== actual.get(index));
+          deterministic = mismatched.length === 0;
+          distinct = new Set(expected.values()).size;
+        } finally {
+          other.host.dispose();
+        }
       }
       return { warnings: loaded.warnings, textures: [...requestedTextures].sort(), duration: loaded.duration, cutTime: loaded.cutTime, cues: loaded.audioCues.length, total, cutIndex, first, last, cut, deterministic, mismatched, distinct, debug };
     } finally {
