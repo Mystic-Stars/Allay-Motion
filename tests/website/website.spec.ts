@@ -370,6 +370,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
     return String(extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
   });
   const settleTimeout = isSoftwareRenderer(renderer) ? 20_000 : 3_000;
+  if (isSoftwareRenderer(renderer)) test.setTimeout(test.info().timeout * 5);
   /** 页面上所有带 data-motion 的段落（首屏到分镜的主视觉、剪辑点、导航的播放头）都已落到终态 */
   const allSettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].every((e) => e.dataset.settled === 'true'));
   const unsettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].filter((e) => e.dataset.settled !== 'true').map((e) => e.dataset.motion));
