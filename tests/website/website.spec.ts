@@ -366,7 +366,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
   const allSettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].every((e) => e.dataset.settled === 'true'));
   const unsettled = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-motion]')].filter((e) => e.dataset.settled !== 'true').map((e) => e.dataset.motion));
   await page.mouse.move(700, 450);
-  // 滚轮：每次 100 px、间隔 250 ms，每滚 4 格停一下；停手 2 秒后必须全部是终态
+  // 滚轮：每次 100 px、间隔 250 ms，每滚 4 格停一下；停手 2 秒后检查，并给弹簧相机最多 3 秒落定
   const total = await page.evaluate(() => document.documentElement.scrollHeight);
   let y = 0;
   for (let i = 1; y < total * 0.55; i++) {
@@ -374,7 +374,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
     await page.waitForTimeout(250);
     if (i % 4 === 0) {
       await page.waitForTimeout(2000);
-      expect(await unsettled(), `scrollY ${y}`).toEqual([]);
+      await expect.poll(() => unsettled(), { timeout: 3000, message: `scrollY ${y}` }).toEqual([]);
     }
     y = await page.evaluate(() => window.scrollY);
   }

@@ -1930,4 +1930,5 @@ GitHub 的 Windows 机器没有显卡。Chromium 的 WebGL 走 **WARP**，渲染
 - `T-TPL-4` 保持每款模板 50 组固定种子的随机合法参数和原有透明首尾、剪辑点、警告、时长断言。模板逐帧完整渲染及跨 Worker 全帧哈希由 `T-TPL-3` 对每款模板完整覆盖；T-TPL-4 改为对首帧、剪辑帧、末帧在两个 Worker 中以相反顺序做哈希抽样，仍能发现关键帧的不确定性，但避免对每组参数重复渲染整段动画。抽样没有覆盖每个中间帧，完整帧序验收仍由 T-TPL-3 承担。本机 NVIDIA 和 WARP 的 T-TPL-4 都通过，WARP 从超过 60 分钟降至约 1 分 18 秒。
 - T-EXP-4 对预览浮点样本能量和导出 PCM16 能量的比较，改用 PCM 量化误差的解析上界；音频算法与导出格式未改。WARP 及本机显卡定向测试均通过。
 - 系统字体渲染接入后，旧 generic 加载界面基准仍包含旧像素字体。用本机 NVIDIA 渲染器重新生成 `loading-screen` 的九张非透明参考帧；未改其他模板的基准图。加载界面旧样式专项和全体模板 T-TPL-5 在 WARP 上通过。基准仍是生成的测试图，不含游戏素材。
-- 复验：`pnpm typecheck`、`pnpm lint`、`pnpm test`（90 个文件、809 项）、来源检查、许可检查及完整 `pnpm test:engine`（55 项）均通过。首次在本隔离工作树运行单测时，因 Electron 未安装而下载失败；设置本机已安装的 Electron 45.3.1 后全数通过。网站测试、桌面 e2e、导出编码及发布构建尚未在此隔离修复中运行，待最终 GitHub Actions 验证。
+- 复验：`pnpm typecheck`、`pnpm lint`、`pnpm test`（90 个文件、809 项）、完整 `pnpm test:engine`（55 项）、`pnpm test:export`（41 项）、来源检查和许可检查均通过。首次在本隔离工作树运行单测时，因 Electron 未安装而下载失败；设置本机已安装的 Electron 45.3.1 后全数通过。桌面 `pnpm test:e2e` 本机执行有环境相关失败（隔离工作树的资源目录和 Electron override 与 CI runner 不同），最终以干净 GitHub runner 为准；发布构建尚未运行。
+- 最终版本的官网 CI 偶发在 T-WEB-15 滚轮停顿处等待整页 3D 世界的弹簧相机落定超过固定 2 秒；完整官网套件在同提交本机复跑通过。测试仍保留 2 秒停顿要求，并继续要求 `world` 最终标记 settled，只允许之后最多 3 秒等待帧循环报告落定，以覆盖 CI 帧节奏波动；没有放宽最终状态断言。修改后完整 `pnpm test:website` 18/18 通过。
