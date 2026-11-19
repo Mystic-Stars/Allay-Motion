@@ -48,7 +48,7 @@ const JOB = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 function installFakeApi(): void {
   calls = { start: [], written: 0, canceled: [] };
-  (globalThis as unknown as { window: unknown }).window = {
+  vi.stubGlobal('window', Object.assign(new EventTarget(), {
     allay: {
       export: {
         start: async (req: unknown) => {
@@ -65,7 +65,7 @@ function installFakeApi(): void {
         },
       },
     },
-  };
+  }));
 }
 
 const disposers: (() => void)[] = [];
@@ -84,6 +84,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   while (disposers.length) disposers.pop()!();
+  vi.unstubAllGlobals();
 });
 
 async function waitFor(fn: () => boolean): Promise<void> {
@@ -96,6 +97,9 @@ describe('导出任务的命令', () => {
     const out = (await dispatch('exportTask.start', { preset: 'prores4444', quality: 'draft' })) as { taskId: string };
     expect(out.taskId).toMatch(/^[0-9a-f-]{36}$/);
     expect(useUiStore.getState().exporting).toBe(true);
+    const unloading = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unloading);
+    expect(unloading.defaultPrevented).toBe(true);
     const first = (await dispatch('exportTask.get', { taskId: out.taskId })) as { status: string };
     expect(['preparing', 'rendering', 'muxing']).toContain(first.status);
     await waitFor(() => tasks.getExportTask(out.taskId)?.status === 'done');
@@ -106,6 +110,7 @@ describe('导出任务的命令', () => {
     expect(calls.start[0]).toMatchObject({ preset: 'prores4444', width: 64, height: 64, fps: 30, totalFrames: 31, cutFrame: 15, suggestedName: 'proj_Block wipe_64x64_30fps' });
     expect(useUiStore.getState().exporting).toBe(false);
     expect(tasks.useExportTasks.getState().activeId).toBeNull();
+    expect(window.dispatchEvent(new Event('beforeunload', { cancelable: true }))).toBe(true);
   });
 
   it('省略的参数取工程的导出设置；文件名可以指定', async () => {
