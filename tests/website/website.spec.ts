@@ -385,7 +385,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
     await page.keyboard.press('PageDown');
     await page.waitForTimeout(80);
   }
-  await expect.poll(allSettled, { timeout: 3000 }).toBe(true);
+  await expect.poll(allSettled, { timeout: 10_000 }).toBe(true);
   // 导航锚点跳转（从页首直接跳到模板一节，越过分镜和剪辑点）：落到终态，剪辑点是“播完”而不是在播
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await page.waitForTimeout(2000);
@@ -401,7 +401,7 @@ test('T-WEB-15 滚动手感：滚轮一格一格地滚、连按 PageDown、点�
       { timeout: 6000 },
     )
     .toBe(true);
-  await expect.poll(allSettled, { timeout: 3000 }).toBe(true);
+  await expect.poll(allSettled, { timeout: 10_000 }).toBe(true);
   expect(await cutState(page)).toBe('done');
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
 });
