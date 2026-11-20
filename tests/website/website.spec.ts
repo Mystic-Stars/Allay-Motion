@@ -581,7 +581,7 @@ test('T-WEB-17 体素雕塑能玩（真实的鼠标输入）：划过拨开方�
   expect(await shocks()).toBe(n0 + 1);
   await page.mouse.up();
   expect(await page.evaluate(() => document.documentElement.dataset.worldDrag)).toBe('false');
-  await expect.poll(async () => Math.abs((await yaw()) - yaw0), { timeout: 4000 }).toBeLessThan(0.4);
+  await expect.poll(async () => Math.abs((await yaw()) - yaw0), { timeout: frameTimeout }).toBeLessThan(0.4);
   // 点在字上不放冲击波；点在空白处（雕塑的框里，背景方块给它让了位）放
   const h1 = (await page.locator('h1').first().boundingBox())!;
   await page.mouse.click(h1.x + 30, h1.y + 30);
