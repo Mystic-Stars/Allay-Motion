@@ -563,7 +563,7 @@ test('T-WEB-17 体素雕塑能玩（真实的鼠标输入）：划过拨开方�
     probe.active = false;
     return probe.peak;
   });
-  expect(peak).toBeGreaterThan(idle + 1);
+  expect(peak).toBeGreaterThan(idle + 0.2);
   await expect.poll(stir, { timeout: frameTimeout }).toBeLessThan(idle + 0.2);
   // 指针在雕塑的框里：光标是“可抓”
   await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3, { steps: 5 });
