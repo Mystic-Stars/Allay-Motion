@@ -594,6 +594,14 @@ test('T-WEB-19 背景方块（真实的鼠标输入）：按住拖到与另一�
   const { page } = s;
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   const world = page.getByTestId('world');
+  const renderer = await world.evaluate((element) => {
+    const gl = (element as HTMLCanvasElement).getContext('webgl2');
+    if (!gl) return 'none';
+    const extension = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  });
+  const settleTimeout = isSoftwareRenderer(renderer) ? 20_000 : 6_000;
+  await expect.poll(() => page.evaluate(() => typeof (window as unknown as { __siteWorld?: { blocks?: unknown } }).__siteWorld?.blocks === 'function'), { timeout: 20_000 }).toBe(true);
   await expect(world).toHaveAttribute('data-settled', 'true', { timeout: 20_000 });
   type Blk = { id: number; x: number; y: number; r: number; group: number | null; size: number };
   type SW = { blocks: () => Blk[]; groupOf: (id: number) => { id: number; size: number } | null; pos: (id: number) => { x: number; y: number } | null };
@@ -624,7 +632,7 @@ test('T-WEB-19 背景方块（真实的鼠标输入）：按住拖到与另一�
   await page.waitForTimeout(250);
   await page.mouse.up();
   await expect(html).toHaveAttribute('data-world-drag', 'false');
-  await expect(world).toHaveAttribute('data-settled', 'true', { timeout: 6000 });
+  await expect(world).toHaveAttribute('data-settled', 'true', { timeout: settleTimeout });
   const a1 = (await pos(A.id))!;
   const b1 = (await pos(B.id))!;
   expect(Math.hypot(b1.x - B.x, b1.y - B.y)).toBeGreaterThan(80);
@@ -638,7 +646,7 @@ test('T-WEB-19 背景方块（真实的鼠标输入）：按住拖到与另一�
   expect(Math.hypot(b2.x - b1.x, b2.y - b1.y)).toBeGreaterThan(60);
   expect(Math.hypot(a2.x - a1.x - (b2.x - b1.x), a2.y - a1.y - (b2.y - b1.y))).toBeLessThan(40);
   await page.mouse.up();
-  await expect(world).toHaveAttribute('data-settled', 'true', { timeout: 6000 });
+  await expect(world).toHaveAttribute('data-settled', 'true', { timeout: settleTimeout });
   // 双击一块：从组里弹出去，组变小
   const before = (await groupOf(A.id))!.size;
   const target = (await pos(A.id))!;
