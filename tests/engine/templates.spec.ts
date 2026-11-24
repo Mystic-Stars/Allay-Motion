@@ -22,7 +22,6 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const ELECTRON = createRequire(join(ROOT, 'apps/desktop/package.json'))('electron') as string;
 export const BASELINE_DIR = join(ROOT, 'tests/fixtures/baselines');
 const UPDATE = process.env.ALLAY_UPDATE_BASELINES === '1';
-const STRESS = process.env.ALLAY_TPL_STRESS === '1';
 
 let app: ElectronApplication;
 let page: Page;
@@ -94,25 +93,14 @@ function reportCut(where: string, width: number, height: number, cut: { min: num
 
 test('T-TPL-3 每个内置模板、三种画幅、默认参数：无警告，通过 T-ENG-1，首末帧全透明，剪辑点完全不透明', async () => {
   const rules = await rendererRules();
-  // 默认跑首末/剪辑点全分辨率检查 + 7 帧 1/4 尺度双 Worker 确定性抽样；设 ALLAY_TPL_STRESS=1 时恢复全帧全量压力扫一遍
-  test.setTimeout(
-    STRESS
-      ? rules.software
-        ? perTemplateTimeout(3_600_000, 900_000)
-        : perTemplateTimeout(600_000, 100_000)
-      : rules.software
-        ? perTemplateTimeout(900_000, 120_000)
-        : perTemplateTimeout(300_000, 30_000),
-  );
+  // WARP 上同样的工作量慢二三十倍
+  test.setTimeout(rules.software ? perTemplateTimeout(3_600_000, 900_000) : perTemplateTimeout(600_000, 100_000));
   test.info().annotations.push({ type: 'renderer', description: rules.gpu }, { type: 'rt-probe', description: rt.summary });
   // 分片时这一份可以是空的（模板比份数少），但内置模板本身不能一个都没有
   expect(builtinCount).toBeGreaterThan(0);
   for (const [id, manifest] of Object.entries(builtins)) {
     for (const a of ASPECTS) {
-      const sample = STRESS
-        ? undefined
-        : { frames: 7, output: { width: Math.round(a.width / 4), height: Math.round(a.height / 4), fps: 60 }, quality: { subframes: 1, shutterAngle: 180 } };
-      const r = await call('tplCheck', id, { width: a.width, height: a.height, fps: 60 }, STANDARD, {}, true, sample);
+      const r = await call('tplCheck', id, { width: a.width, height: a.height, fps: 60 }, STANDARD, {}, true);
       const where = `${id} ${a.name}`;
       expect(r.warnings, `${where} warnings`).toEqual([]);
       // 逐字节的 T-ENG-1：探针证明这块显卡会写坏渲染目标时跳过（rt-probe 注解里有探针的结果）
@@ -120,16 +108,12 @@ test('T-TPL-3 每个内置模板、三种画幅、默认参数：无警告，通
         expect(r.mismatched, `${where} T-ENG-1 mismatched frames ${JSON.stringify(r.debug)}`).toEqual([]);
         expect(r.deterministic, `${where} T-ENG-1`).toBe(true);
       }
-      if (STRESS) {
-        // 全量模式要求一半以上的非停留帧互不相同
-        const holdDef = manifest.params?.find((p) => p.key === 'hold');
-        const holdSeconds = manifest.category !== 'transition' && holdDef?.type === 'duration' ? holdDef.default : 0;
-        const still = Math.max(0, Math.floor(holdSeconds * 60) - 1);
-        expect(r.distinct, `${where} distinct frames`).toBeGreaterThan((r.total - still) / 2);
-      } else {
-        // 抽样模式要求确实有动画变化（不能是一整段静止/全透明）
-        expect(r.distinct, `${where} sampled distinct frames`).toBeGreaterThanOrEqual(2);
-      }
+      // 确实在动。转场类照旧要求一半以上的帧互不相同；叠加层（没有剪辑点，如 T6 的提示框）在停留阶段本来就静止，
+      // 停留阶段内部的帧不计入（docs/decisions.md M6a）
+      const holdDef = manifest.params?.find((p) => p.key === 'hold');
+      const holdSeconds = manifest.category !== 'transition' && holdDef?.type === 'duration' ? holdDef.default : 0;
+      const still = Math.max(0, Math.floor(holdSeconds * 60) - 1);
+      expect(r.distinct, `${where} distinct frames`).toBeGreaterThan((r.total - still) / 2);
       expect(r.first.max, `${where} first frame`).toBe(0);
       expect(r.last.max, `${where} last frame`).toBe(0);
       reportCut(where, a.width, a.height, r.cut);
@@ -137,26 +121,17 @@ test('T-TPL-3 每个内置模板、三种画幅、默认参数：无警告，通
         expect(r.cut, `${where} has a cut`).not.toBeNull();
         expect(r.cut!.min, `${where} cut frame`).toBe(255);
       }
-      test.info().annotations.push({ type: where, description: `duration ${r.duration}, cut ${r.cutTime}, ${r.total} frames (checked ${r.checkedFrames}), ${r.cues} cues` });
+      test.info().annotations.push({ type: where, description: `duration ${r.duration}, cut ${r.cutTime}, ${r.total} frames, ${r.cues} cues` });
     }
   }
 });
 
-test('T-TPL-4 每个内置模板随机合法参数：不抛错，三条断言仍成立，duration 在规定范围内', async () => {
+test('T-TPL-4 每个内置模板 50 组随机合法参数：不抛错，三条断言仍成立，duration 在规定范围内', async () => {
   const rules = await rendererRules();
-  test.setTimeout(
-    STRESS
-      ? rules.software
-        ? perTemplateTimeout(3_600_000, 900_000)
-        : perTemplateTimeout(1_800_000, 300_000)
-      : rules.software
-        ? perTemplateTimeout(900_000, 120_000)
-        : perTemplateTimeout(300_000, 30_000),
-  );
+  test.setTimeout(rules.software ? perTemplateTimeout(3_600_000, 900_000) : perTemplateTimeout(1_800_000, 300_000));
   test.info().annotations.push({ type: 'renderer', description: rules.gpu }, { type: 'rt-probe', description: rt.summary });
-  const paramCount = STRESS ? 50 : 6;
   for (const [id, manifest] of Object.entries(builtins)) {
-    const sets = randomParamSets(manifest.params ?? [], paramCount, 20261113);
+    const sets = randomParamSets(manifest.params ?? [], 50, 20261113);
     const r = prng(7);
     for (const [k, params] of sets.entries()) {
       // 画幅、帧率、画质、快门角也随机：首末帧透明、剪辑点不透明要在任意画质和 0–360° 快门角下成立
@@ -166,7 +141,7 @@ test('T-TPL-4 每个内置模板随机合法参数：不抛错，三条断言仍
       const quality: FrameQuality = { subframes: [1, 2, 4, 8, 16][Math.floor(r() * 5)]!, shutterAngle: k % 5 === 0 ? 360 : Math.floor(r() * 361) };
       const output = { width: aspect.width * scale, height: aspect.height * scale, fps };
       const where = `${id} #${k} ${aspect.name} ${fps}fps N=${quality.subframes} A=${quality.shutterAngle} ${JSON.stringify(params)}`;
-      const res = await call('tplCheck', id, output, quality, params, true, STRESS ? undefined : { frames: 3 });
+      const res = await call('tplCheck', id, output, quality, params, true);
       expect(res.duration, where).toBeGreaterThanOrEqual(DURATION_RANGE[0]);
       expect(res.duration, where).toBeLessThanOrEqual(DURATION_RANGE[1]);
       expect(res.warnings, where).toEqual([]);

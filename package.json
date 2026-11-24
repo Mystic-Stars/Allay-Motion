@@ -19,7 +19,6 @@
     "test": "vitest run && node --test tests/sync-gitcode-release.test.mjs tests/pull-github-release-assets.test.mjs",
     "test:engine": "vite build --configLoader runner --config tests/engine/vite.config.ts && playwright test --config playwright.engine.config.ts",
     "test:engine:templates": "vite build --configLoader runner --config tests/engine/vite.config.ts && playwright test --config playwright.engine.config.ts tests/engine/templates.spec.ts",
-    "test:engine:stress": "node -e \"import('node:child_process').then(c => process.exit(c.spawnSync('pnpm', ['test:engine:templates'], { stdio: 'inherit', shell: true, env: { ...process.env, ALLAY_TPL_STRESS: '1' } }).status ?? 1))\"",
     "test:export": "vitest run --config vitest.export.config.ts",
     "test:e2e": "pnpm build && playwright test",
     "test:website": "pnpm --filter @allay/website build && playwright test --config playwright.website.config.ts",

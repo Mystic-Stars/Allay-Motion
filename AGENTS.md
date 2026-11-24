@@ -45,7 +45,7 @@
 
 ## CI 与发布
 
-- `.github/workflows/ci.yml` 对任意分支的推送、PR 和手动触发运行，作业都在 Windows 上：`check` 作业默认只执行一遍 `pnpm check`（含类型、lint、单元、引擎、导出、素材来源、许可、官网和端到端检查），其中内置模板的引擎测试默认跑抽样验收（2 份里的第 1 份，第 2 份由“模板引擎测试”作业并行跑；全量压力测试通过 `pnpm test:engine:stress` 手动运行）。推送和 PR 是独立事件，存在 PR 时同一次推送可能触发两次运行。
+- `.github/workflows/ci.yml` 对任意分支的推送、PR 和手动触发运行，作业都在 Windows 上：`check` 作业默认只执行一遍 `pnpm check`（含类型、lint、单元、引擎、导出、素材来源、许可、官网和端到端检查），其中内置模板的引擎测试只跑 8 份里的第 1 份；第 2–8 份由七个并行的“模板引擎测试”作业跑。推送和 PR 是独立事件，存在 PR 时同一次推送可能触发两次运行。
 - `pnpm check:removable` 验证移除 `packages/optional` 后项目仍能工作；日常 CI 不重复运行。修改可选模块或其装载方式时，在 GitHub Actions 的 `ci` 工作流手动运行并勾选 `check_removable`。
 - 完整构建和测试以 GitHub Actions 结果为准；在本机只运行适合改动的静态或针对性检查，测试保持后台运行。
 - `.github/workflows/release.yml` 在推送 `v*` 标签时构建和自动发布；手动触发只产出构建结果。`.github/workflows/gitcode-mirror.yml` 单向同步代码、标签和已发布 Release，具体见 `docs/gitcode-mirror.md`。

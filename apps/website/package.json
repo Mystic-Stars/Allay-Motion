@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "项目官网（纯静态产物）",
+  "description": "项目官网：落地页和浏览器里的仿真编辑器（纯静态产物）",
   "scripts": {
     "dev": "vite --configLoader runner",
     "build": "vite build --configLoader runner",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@allay/assets": "workspace:*",
+    "@allay/desktop": "workspace:*",
     "@allay/engine": "workspace:*",
     "@allay/mascot": "workspace:*",
     "@allay/template-sdk": "workspace:*",
@@ -21,13 +22,16 @@
     "i18next": "^27.1.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-i18next": "^18.0.1"
+    "react-i18next": "^18.0.1",
+    "three": "0.187.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "0.187.0",
     "tailwindcss": "^4.3.5",
     "typescript": "~6.0.3",
     "vite": "^8.3.8"

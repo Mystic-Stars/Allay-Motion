@@ -1,8 +1,9 @@
 # 每次推送或 PR 跑一遍完整检查；可选模块拆除检查按需手动运行。
 # 安装包由 release.yml 构建。这里只读仓库，第三方 action 固定到提交哈希。
 #
-# 内置模板的引擎测试（T-TPL-3、4、5）默认跑抽样验收（tests/engine/templates.spec.ts，全量压力检查用 pnpm test:engine:stress 按需触发），按模板分成 2 份（tests/engine/shard.ts）：
-# 第 1 份随 pnpm check 在 check 作业里跑，第 2 份在 templates 作业里并行跑。两份合起来是全部模板。
+# 内置模板的引擎测试（T-TPL-3、4、5）按模板分成 8 份（tests/engine/shard.ts，docs/decisions.md“内置模板扩到 100 个”“v0.3.0 的发版准备”）：
+# 第 1 份随 pnpm check 在 check 作业里跑，第 2–8 份在 templates 作业里并行跑。八份合起来是全部模板，每个模板的检查不变。
+# 每份不多于 5 个模板（软件渲染下一个模板十分钟上下，作业时限 180 分钟）；模板再多时照这个比例加份数。
 # 改份数时三处一起改：check 作业的 ALLAY_TPL_SHARD、templates 作业的 matrix.shard 和它的 ALLAY_TPL_SHARD
 # （tests/unit/T-TPL-SHARD.template-shards.test.ts 核对这三处对得上）。
 name: ci
@@ -31,7 +32,7 @@ jobs:
     name: pnpm check
     runs-on: windows-latest
     # CI 的 WebGL 是软件渲染（WARP），引擎测试比显卡上慢二三十倍（tests/engine/software.ts）
-    timeout-minutes: ${{ inputs.check_removable && 180 || 90 }}
+    timeout-minutes: ${{ inputs.check_removable && 360 || 180 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,7 +67,7 @@ jobs:
       - name: pnpm check
         run: pnpm check
         env:
-          ALLAY_TPL_SHARD: 1/2
+          ALLAY_TPL_SHARD: 1/8
 
       # 只有手动勾选时才重复跑完整测试，验证移除可选模块后的行为。
       - name: pnpm check:removable
@@ -83,14 +84,14 @@ jobs:
           if-no-files-found: ignore
 
   templates:
-    name: 模板引擎测试 ${{ matrix.shard }}/2
+    name: 模板引擎测试 ${{ matrix.shard }}/8
     runs-on: windows-latest
     # 同 check：软件渲染下引擎测试慢二三十倍
-    timeout-minutes: 60
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [2]
+        shard: [2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,7 +113,7 @@ jobs:
       - name: pnpm test:engine:templates
         run: pnpm test:engine:templates
         env:
-          ALLAY_TPL_SHARD: ${{ matrix.shard }}/2
+          ALLAY_TPL_SHARD: ${{ matrix.shard }}/8
 
       - name: 上传失败时的测试记录
         if: failure()

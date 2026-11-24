@@ -1,5 +1,8 @@
 /*
- * 官网样式：中性色为主、1 px 描边、小圆角、扁平卡片，直接复用 packages/ui 的设计变量和组件。
+ * 官网的样式（第三版，docs/decisions.md 官网 · 第三版）。
+ * shadcn 的气质：中性色为主、1 px 描边、小圆角、扁平或极浅的阴影；控件一律用 packages/ui 的组件和既有变体，这里不另做按钮。
+ * 颜色、圆角、缓动都取 packages/ui 的设计变量；品牌蓝只用在主操作、焦点环、播放头和少量强调上。
+ * 冲击力来自排版（超大字号与小号等宽标注的对比、留白）、真实引擎渲染的画面和滚动叙事，不靠光效。
  */
 @import "@allay/ui/styles.css";
 
@@ -7,6 +10,10 @@
 @source "../../../../packages/mascot/src";
 @source "./";
 
+/*
+ * 字体：英文与数字照旧是 IBM Plex Sans / Mono（与应用相同，体积小，构建时预加载）。
+ * 中文先用系统自带的黑体（苹方、微软雅黑等），Noto Sans SC 只在系统没有中文字体时才下载（docs/decisions.md 官网 · 字体）。
+ */
 :root {
   --font-ui: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif;
   --font-num: "IBM Plex Mono", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", Consolas, monospace;
@@ -15,10 +22,11 @@
   --ease-expo: cubic-bezier(.16, 1, .3, 1);
 }
 
-/* ---------- 页面面色 ---------- */
+/* ---------- 页面级的面色 ---------- */
 :root,
 [data-theme='dark'] {
   --site-bg: var(--background);
+  --site-deep: var(--background);
   --site-card: var(--surface-1);
   --site-line: var(--divider);
   --site-line-hi: var(--control-hi);
@@ -26,6 +34,7 @@
 }
 [data-theme='light'] {
   --site-bg: var(--surface-1);
+  --site-deep: var(--well);
   --site-card: var(--surface-2);
   --site-line: var(--control-hi);
   --site-line-hi: color-mix(in srgb, var(--foreground) 20%, transparent);
@@ -34,24 +43,21 @@
 
 @theme inline {
   --color-site: var(--site-bg);
+  --color-site-deep: var(--site-deep);
   --color-site-card: var(--site-card);
   --color-site-line: var(--site-line);
 }
 
 @layer base {
+  /* 应用是一整屏不滚动的窗口；官网是长页面 */
   html,
   body {
     height: auto;
     overflow: visible;
   }
   html {
-    scroll-padding-top: calc(var(--nav-h) + 52px);
+    scroll-padding-top: calc(var(--nav-h) + 16px);
     background: var(--site-bg);
-  }
-  @media (min-width: 768px) {
-    html {
-      scroll-padding-top: calc(var(--nav-h) + 20px);
-    }
   }
   body {
     background: var(--site-bg);
@@ -62,79 +68,87 @@
   }
 }
 
-/* ---------- 版心与排版 ---------- */
+/* ---------- 版心 ---------- */
 .wrap {
   width: 100%;
-  max-width: 1360px;
+  max-width: 1440px;
   margin-inline: auto;
   padding-inline: var(--gutter);
 }
 
+/* ---------- 排版：超大字号与小号等宽标注的强对比 ---------- */
 .t-display {
-  font-size: clamp(40px, 5.2vw, 76px);
-  line-height: .98;
+  font-size: clamp(48px, 8.4vw, 150px);
+  line-height: .9;
   font-weight: 600;
-  letter-spacing: -.045em;
+  letter-spacing: -.058em;
 }
 :lang(zh-CN) .t-display {
-  font-size: clamp(36px, 4.6vw, 68px);
-  line-height: 1.08;
-  letter-spacing: -.03em;
+  font-size: clamp(40px, 6.5vw, 116px);
+  line-height: 1.04;
+  letter-spacing: -.035em;
 }
 .t-h2 {
-  font-size: clamp(30px, 3.6vw, 52px);
-  line-height: 1.04;
+  font-size: clamp(38px, 5.4vw, 92px);
+  line-height: .94;
   font-weight: 600;
-  letter-spacing: -.04em;
+  letter-spacing: -.05em;
   text-wrap: balance;
 }
 :lang(zh-CN) .t-h2 {
-  font-size: clamp(28px, 3.2vw, 48px);
-  line-height: 1.12;
-  letter-spacing: -.025em;
+  font-size: clamp(34px, 4.8vw, 80px);
+  line-height: 1.1;
+  letter-spacing: -.03em;
 }
 .t-h3 {
-  font-size: clamp(18px, 1.5vw, 23px);
-  line-height: 1.25;
+  font-size: clamp(20px, 1.7vw, 26px);
+  line-height: 1.2;
   font-weight: 600;
-  letter-spacing: -.02em;
+  letter-spacing: -.025em;
 }
 :lang(zh-CN) .t-h3 {
   letter-spacing: -.01em;
-  line-height: 1.32;
+  line-height: 1.3;
 }
 .t-lead {
-  font-size: clamp(16px, 1.15vw, 18.5px);
+  font-size: clamp(17px, 1.3vw, 20px);
   line-height: 1.6;
   color: var(--fg-muted);
   text-wrap: pretty;
 }
 .t-body {
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.65;
   color: var(--fg-muted);
   text-wrap: pretty;
 }
+/* 等宽小标注：时间码、编号、规格 */
 .t-mono {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
-  letter-spacing: .12em;
+  letter-spacing: .14em;
   text-transform: uppercase;
   font-variant-numeric: tabular-nums;
 }
 :lang(zh-CN) .t-mono {
-  letter-spacing: .08em;
+  letter-spacing: .1em;
 }
 .t-tab {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
 }
+/* 描边大数字（分镜的编号） */
+.t-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+/* 标题里的一段强调：平涂的品牌蓝文字色 */
 .accent {
   color: var(--primary-text);
 }
 
-/* ---------- 底纹 ---------- */
+/* ---------- 极淡的底纹：点阵、网格 ---------- */
 .bg-dots {
   background-image: radial-gradient(circle at center, var(--dot) 1px, transparent 1.4px);
   background-size: 22px 22px;
@@ -152,7 +166,7 @@
   mask-image: linear-gradient(to bottom, black 55%, transparent);
 }
 
-/* ---------- 卡片与面板 ---------- */
+/* ---------- 卡片：面板色、1 px 描边、面板圆角，没有阴影 ---------- */
 .card {
   position: relative;
   border-radius: var(--r-panel);
@@ -168,6 +182,91 @@
   }
 }
 
+/* 焦点环：沿用应用的 --ring（2 px、外偏移 2 px） */
+.link-focus:focus-visible {
+  outline: var(--focus-width) solid var(--ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* ---------- 导航：应用顶栏同款的实底 + 细描边；中间是这一页的时间轴 ---------- */
+.nav-bar {
+  background: var(--site-bg);
+  border-bottom: 1px solid var(--site-line);
+}
+.nav-clip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+  padding-inline: 10px;
+  color: var(--fg-subtle);
+  transition: color var(--dur-2) var(--ease-out);
+}
+.nav-clip:hover,
+.nav-clip[data-current='true'] {
+  color: var(--foreground);
+}
+.nav-clip .nav-clip-bar {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 7px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--clip, var(--stage-hold)) 45%, transparent);
+  transition: background-color 300ms var(--ease-out);
+}
+.nav-clip[data-current='true'] .nav-clip-bar {
+  background: var(--clip, var(--stage-hold));
+}
+.playhead-line {
+  position: absolute;
+  top: 6px;
+  bottom: 4px;
+  left: 0;
+  width: 1.5px;
+  margin-left: -.75px;
+  background: var(--primary);
+  will-change: transform;
+}
+.playhead-line::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 9px;
+  height: 6px;
+  margin-left: -4.5px;
+  background: var(--primary);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+/* 剪辑点：琥珀色的菱形（与应用时间轴上剪辑点的颜色相同） */
+.cut-mark {
+  position: absolute;
+  bottom: 5px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: var(--mark);
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+
+/* ---------- 分节之间安静的过渡：一条带刻度的标尺 ---------- */
+.ruler {
+  height: 28px;
+  background-image:
+    linear-gradient(90deg, var(--site-line-hi) 1px, transparent 1px),
+    linear-gradient(90deg, var(--site-line) 1px, transparent 1px);
+  background-size: 120px 14px, 12px 7px;
+  background-repeat: repeat-x;
+  background-position: 0 100%, 0 100%;
+  border-bottom: 1px solid var(--site-line);
+}
+
+/* ---------- 预览面板：应用的预览面板（面板色、面板圆角），加 1 px 描边和浮起的浅阴影 ---------- */
 .monitor {
   position: relative;
   border-radius: var(--r-panel);
@@ -179,42 +278,16 @@
   background: var(--surface-2);
 }
 
-.link-focus:focus-visible {
-  outline: var(--focus-width) solid var(--ring);
-  outline-offset: var(--focus-offset);
+/* 仿 Electron 窗口 */
+.site-window {
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: var(--shadow-dialog);
+  outline: 1px solid var(--control);
+  overflow: hidden;
 }
 
-/* ---------- 导航 ---------- */
-.nav-bar {
-  background: var(--site-bg);
-  border-bottom: 1px solid var(--site-line);
-}
-.nav-link {
-  color: var(--fg-muted);
-  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
-}
-.nav-link:hover,
-.nav-link[data-current='true'] {
-  color: var(--foreground);
-}
-.nav-link[data-current='true'] {
-  background: var(--control);
-}
-
-/* ---------- 剪辑点标记与播放头 ---------- */
-.cut-mark {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  margin-left: -4px;
-  background: var(--mark);
-  transform: rotate(45deg);
-  border-radius: 1px;
-}
-.site-playhead {
-  will-change: transform;
-}
-
+/* 像素图：整数倍放大，不糊 */
 .pixelated {
   image-rendering: pixelated;
 }
@@ -224,19 +297,94 @@
 .site-scroll-x::-webkit-scrollbar {
   display: none;
 }
+.site-playhead {
+  will-change: transform;
+}
 
-/* ---------- 进视口显隐（仅在确认逐帧绘制且未开减少动效时启用） ---------- */
+/* ---------- 入场：遮罩里升起（只在确认页面逐帧渲染后才做，失败即显示） ---------- */
+@keyframes rise-in {
+  from {
+    transform: translateY(105%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes scroll-cue {
+  0% {
+    transform: translateY(-100%);
+  }
+  60%,
+  100% {
+    transform: translateY(260%);
+  }
+}
+.line-mask {
+  display: block;
+  overflow: hidden;
+  padding-bottom: .08em;
+  margin-bottom: -.08em;
+}
+.line-mask > span {
+  display: block;
+}
+.motion-ok .intro .line-mask > span {
+  animation: rise-in 1100ms var(--ease-expo) both;
+  animation-delay: calc(120ms + var(--i, 0) * 110ms);
+}
+.motion-ok .intro .intro-fade {
+  animation: fade-up 900ms var(--ease-expo) both;
+  animation-delay: calc(420ms + var(--i, 0) * 90ms);
+}
+
+/*
+ * 进视口时的编排（motion/interactions 的 useReveal 打 data-armed / data-shown）。
+ * 没武装（已在视口里、后台标签页、减少动效）时就是终态。
+ */
 .reveal > * {
   transition:
-    opacity 650ms var(--ease-expo),
-    transform 650ms var(--ease-expo);
-  transition-delay: calc(var(--i, 0) * 60ms);
+    opacity 900ms var(--ease-expo),
+    transform 900ms var(--ease-expo);
+  transition-delay: calc(var(--i, 0) * 80ms);
 }
-.motion-ok:not([data-reduced-motion='true']) [data-armed='true'][data-shown='false'].reveal > * {
+[data-armed='true'][data-shown='false'].reveal > * {
   opacity: 0;
-  transform: translateY(18px);
+  transform: translateY(28px);
 }
 
+/* 分镜：三步叠在同一格里，只显示当前这一步（先淡出、再淡入，不叠在一起） */
+.story-steps > * {
+  transition:
+    opacity 360ms var(--ease-out) 160ms,
+    visibility 0s linear 0s;
+}
+.story-steps > [data-active='false'] {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 140ms var(--ease-out),
+    visibility 0s linear 140ms;
+}
+
+/* 完全离线：被删掉的全局一个个划掉（进视口时） */
 .strike > li::after {
   content: '';
   position: absolute;
@@ -247,14 +395,52 @@
   background: var(--danger);
   transform-origin: left;
   transform: scaleX(1);
-  transition: transform 420ms var(--ease-expo);
-  transition-delay: calc(180ms + var(--i, 0) * 50ms);
+  transition: transform 520ms var(--ease-expo);
+  transition-delay: calc(300ms + var(--i, 0) * 70ms);
 }
-.motion-ok:not([data-reduced-motion='true']) .strike[data-armed='true'][data-shown='false'] > li::after {
+.strike[data-armed='true'][data-shown='false'] > li::after {
   transform: scaleX(0);
 }
 
+/* 页尾的超大字标 */
+.wordmark-xl {
+  font-size: clamp(64px, 16.4vw, 290px);
+  line-height: 1;
+  padding-bottom: .06em;
+  font-weight: 600;
+  letter-spacing: -.07em;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+/* 页尾字标由 3D 世界里的方块拼好以后，DOM 里的字只变透明 */
+.wordmark-xl[data-voxel-ready='true'] {
+  color: transparent;
+  transition: color 400ms var(--ease-out);
+}
+/* 指针在体素雕塑的框里（空白处，可以按住拖着转）；拖着的时候不选中文字 */
+:root[data-world-hover='true'],
+:root[data-world-hover='true'] body {
+  cursor: grab;
+}
+:root[data-world-drag='true'],
+:root[data-world-drag='true'] body {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* 剪辑点的整幅转场：不在这一段时不显示 */
+.cut-overlay[data-active='false'] {
+  visibility: hidden;
+}
+
+/* ---------- 减少动效：所有入场、过渡都是终态 ---------- */
+[data-reduced-motion='true'] .intro .line-mask > span,
+[data-reduced-motion='true'] .intro .intro-fade {
+  animation: none !important;
+}
 [data-reduced-motion='true'] .reveal > *,
+[data-reduced-motion='true'] .story-steps > *,
 [data-reduced-motion='true'] .strike > li::after {
   transition: none !important;
 }

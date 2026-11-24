@@ -1,165 +1,199 @@
 {
   "meta": {
     "title": "{{name}} — transitions for Minecraft video creators",
-    "description": "Pick a template, tweak parameters, preview in real time, and export alpha-channel transition clips. A free, open-source desktop app."
+    "description": "Pick a template, tweak it, preview in real time, and export transition clips with an alpha channel. A free, open-source desktop app."
   },
   "nav": {
-    "label": "Main navigation",
+    "label": "Main navigation: this page’s timeline",
     "home": "Back to top",
-    "workflow": "Workflow",
+    "try": "Try it",
     "templates": "Templates",
     "features": "Features",
+    "workflow": "Workflow",
     "openSource": "Open source",
     "github": "GitHub",
     "toLight": "Switch to light theme",
     "toDark": "Switch to dark theme",
-    "switchLanguage": "切换到中文"
+    "switchLanguage": "切换到中文",
+    "intro": "Intro",
+    "cut": "The cut (the page’s only transition)",
+    "timecode": "This page’s timecode (follows your scroll)"
   },
   "hero": {
     "eyebrow": "Transitions for Minecraft video creators",
     "titleA": "Make every",
     "titleB": "transition feel ",
-    "titleC": "in‑game.",
-    "lead": "{{name}} is a desktop app: pick a template, tweak parameters, preview in real time, and export clips with an alpha channel to drop straight onto your timeline.",
+    "lead": "{{name}} is a desktop app: pick a template, tweak a few parameters, preview in real time, and export a clip with an alpha channel to lay over the cut between two shots.",
     "primary": "Get it on GitHub",
-    "secondary": "Explore workflow",
-    "factsLabel": "Highlights",
+    "secondary": "Try it in your browser",
     "facts": [
       "Free & open source",
-      "Windows · macOS",
+      "Windows",
       "Fully offline",
       "Alpha-channel export"
     ],
-    "viewerLabel": "Live preview",
-    "pick": "Choose preview template",
+    "viewerLabel": "Preview",
+    "demoAssets": "The web version uses flat demo colors; the desktop app reads your installed game and resource packs.",
+    "pick": "Choose a template",
     "play": "Play",
     "pause": "Pause",
-    "scrub": "Scrub preview timeline",
-    "starting": "Starting render engine…",
-    "noWebgl": "WebGL2 is unavailable in this browser, so the live preview cannot run.",
-    "demoAssets": "This page uses generated flat demo colors; the desktop app reads your local game and resource packs.",
-    "mcAssets": "Block and item textures on this page come from Minecraft {{version}}, © Mojang / Microsoft, shown here for demonstration only. The desktop app reads your installed game and packs; no game files ship with it."
+    "scrub": "Time",
+    "starting": "Starting the render engine…",
+    "noWebgl": "This browser doesn’t support WebGL2, so the live preview can’t run.",
+    "mcAssets": "Block and item textures on this page come from Minecraft {{version}}, © Mojang / Microsoft, and are shown here for demonstration only. The desktop app reads your installed game and resource packs; no game files ship with it.",
+    "titleC": "in‑game.",
+    "factsLabel": "Highlights",
+    "scrollCue": "Scroll down — you’re dragging this page’s playhead"
   },
-  "categories": {
-    "transition": "Transition",
-    "overlay": "Overlay"
-  },
-  "workflow": {
-    "kicker": "Workflow · three steps",
-    "title": "From launch to export in three steps.",
-    "lead": "Pick a template, fine-tune its parameters, and export clean alpha footage. Click any step or control on the left to drive the live render on the right.",
-    "stepsLabel": "Workflow steps",
-    "previewTitle": "Live render",
-    "steps": {
-      "pick": {
-        "tab": "Pick",
-        "kicker": "Step one",
-        "title": "Choose a transition or overlay.",
-        "body": "The desktop app ships a full library of transitions and overlays and lets you write custom TypeScript templates. Click any featured sample below:"
-      },
-      "tune": {
-        "tab": "Tweak",
-        "kicker": "Step two",
-        "title": "Adjust parameters in real time.",
-        "body": "Columns, entrance order, and spin immediately update the live engine via setParams. Try tweaking Block wipe below:",
-        "reset": "Reset defaults"
-      },
-      "export": {
-        "tab": "Export",
-        "kicker": "Step three",
-        "title": "Export ready-to-edit alpha clips.",
-        "body": "Export ProRes 4444, PNG sequences, WebM VP9, or greenscreen MP4. Every exported frame matches the preview frame for frame.",
-        "progressLabel": "Export progress preview",
-        "rendering": "Rendering frames…",
-        "muxing": "Muxing with FFmpeg…",
-        "done": "Export complete — drop directly onto your upper track",
-        "replay": "Replay progress",
-        "download": "Get desktop app"
-      }
-    }
+  "sim": {
+    "kicker": "Try it · simulator",
+    "title": "Try it before you install.",
+    "lead": "The window below is the desktop editor itself: the same interface code, the same render engine, the same built-in templates. Pick a template, drag parameters, scrub the timeline, press Space to play — all of it runs in your browser.",
+    "start": "Start the editor",
+    "starting": "Starting the editor…",
+    "autoStart": "It starts on its own when you scroll here, or you can start it now.",
+    "windowTitle": "{{name}} — simulator",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "close": "Close",
+    "exportNote": "There’s no FFmpeg in the browser: exporting really renders every frame, but no file is written.",
+    "compactTitle": "Your screen is a little narrow",
+    "compact": "The full editor needs a wider screen. Here you can preview and switch templates; open this page on a computer for the whole thing.",
+    "desktopOnly": {
+      "files": "Picking an image from your computer needs the desktop app.",
+      "project": "Opening and saving projects needs the desktop app.",
+      "packs": "Adding resource packs needs the desktop app.",
+      "vanilla": "Reading your Minecraft install needs the desktop app.",
+      "templates": "Installing, exporting and saving templates needs the desktop app.",
+      "presets": "Importing and exporting preset files needs the desktop app.",
+      "folder": "Choosing an output folder needs the desktop app."
+    },
+    "desktopOnlyHint": "This step reads or writes files on your computer, which a web page can’t do.",
+    "getDesktop": "Get the desktop app",
+    "dismiss": "Got it",
+    "exportDoneTitle": "{{frames}} frames rendered",
+    "exportDone": "Every one of those frames went through the real export pipeline. In the desktop app, FFmpeg writes them to “{{format}}”, ready to drop into your editor.",
+    "keepTrying": "Keep trying",
+    "frameLabel": "Simulator: the desktop editor"
   },
   "templates": {
-    "kicker": "Curated showcase",
-    "title": "Start with a few highlights.",
-    "lead": "Every tile is rendered live by the engine right inside your browser — not pre-recorded video. Download the desktop app for the complete library and custom templates.",
+    "kicker": "Templates · a selection",
+    "title": "Start with these.",
+    "lead": "Every tile plays frames the render engine just drew in your browser — not screenshots, not videos. It’s only a selection: the library keeps growing, and you can write your own templates in TypeScript; they load through the same path as the built-in ones.",
     "featured": "Featured",
     "meta": "{{category}} · {{duration}} s",
     "metaNoDuration": "{{category}}",
-    "rendering": "Rendering cover…",
-    "failed": "Could not render this cover.",
-    "preview": "Load in top preview",
-    "params": "Parameters",
-    "moreTitle": "An extensible template ecosystem.",
-    "moreBody": "Each template is a manifest plus a TypeScript script. Follow the authoring guide to build your own and export it just like built-ins.",
-    "moreLink": "Template authoring guide"
+    "rendering": "Rendering…",
+    "failed": "This one didn’t render.",
+    "openInSim": "Open in the simulator",
+    "moreTitle": "More templates on the way.",
+    "moreBody": "A template is a manifest plus a script. Follow the authoring guide, add it to your library, and it previews and exports just like the built-in ones.",
+    "moreLink": "Template authoring guide",
+    "params": "Parameters you can tweak"
   },
   "features": {
     "kicker": "Features",
-    "title": "Built around real editing workflows.",
+    "title": "Every detail, built for editing.",
     "alpha": {
-      "title": "Alpha-channel exports",
-      "body": "Layer directly on top of your footage with zero chroma-keying. Rendered live from the engine below.",
+      "title": "Exports with an alpha channel",
+      "body": "Lay it on a track above your footage — no keying needed.",
       "transparent": "Transparent",
       "over": "Over footage",
-      "drag": "Drag slider to compare transparent and composited views",
-      "footage": "Sample backdrop"
+      "drag": "Drag to compare",
+      "footage": "Your footage"
     },
-    "formats": {
-      "title": "Formats for every NLE",
-      "body": "True alpha channels for pro editors, plus greenscreen MP4 where needed.",
-      "items": [
-        {
-          "name": "ProRes 4444 (Alpha)",
-          "ext": ".mov",
-          "apps": "Premiere · DaVinci Resolve · Final Cut Pro"
-        },
-        {
-          "name": "PNG sequence",
-          "ext": ".zip",
-          "apps": "Any video editor or compositor"
-        },
-        {
-          "name": "WebM VP9 (Alpha)",
-          "ext": ".webm",
-          "apps": "OBS · Premiere · DaVinci Resolve"
-        },
-        {
-          "name": "Greenscreen MP4 (H.264)",
-          "ext": ".mp4",
-          "apps": "CapCut · Jianying and all editors"
-        }
-      ]
+    "frames": {
+      "title": "The preview is the render",
+      "body": "Every frame is a pure function of time. Preview and export run the same rendering code, frame for frame — with optional subframe motion blur.",
+      "preview": "Preview",
+      "export": "Export",
+      "same": "Same frame"
     },
     "stack": {
-      "title": "Bring your own resource packs",
-      "body": "Three stacked layers — built-in colors, vanilla assets, and custom resource packs — with upper layers winning. Click a layer to inspect:",
+      "title": "Bring your own assets",
+      "body": "A three-layer resource stack: built-in, your game’s vanilla assets, your resource packs — upper layers win. Add a pack and the transition reskins itself. Game files are read locally and never copied or uploaded.",
       "layers": [
         "Resource packs",
         "Vanilla assets",
         "Built-in"
-      ]
+      ],
+      "hint": "Hover or focus a layer"
     },
     "offline": {
-      "title": "Offline & sandboxed",
-      "body": "No accounts, telemetry, or third-party tracking. Template scripts execute inside an isolated Web Worker with these globals removed:",
-      "sandbox": "Removed from template workers:"
+      "title": "Fully offline",
+      "body": "No accounts, telemetry, auto-updates or crash reporting. Template scripts run in an isolated worker with no network, files or UI.",
+      "sandbox": "Unavailable to template scripts:"
+    },
+    "extend": {
+      "title": "Extensible templates",
+      "body": "Presets, derived templates, template package import and export, and script templates written in TypeScript. One parameter in the manifest is one control in the properties panel."
+    },
+    "formats": {
+      "title": "Export formats",
+      "body": "The list comes straight from the app: alpha channel for editors that read it, green screen for the ones that don’t."
     }
   },
   "open": {
     "kicker": "Open source · credits",
     "title": "Open, free, and built together.",
-    "lead": "Source code is public on GitHub under the GPL-3.0 license. Issues, templates, and pull requests are welcome.",
-    "repo": "View source",
+    "lead": "The source code is public on GitHub under the GPL-3.0 license. Issues, templates and pull requests are all welcome.",
+    "repo": "View the source",
+    "team": "Developers",
     "license": "License",
     "credits": "Credits",
-    "developersLabel": "Developers",
-    "claudeNote": "The Claude logo is a trademark of Anthropic, shown here for attribution only."
+    "claudeNote": "The Claude logo is a trademark of Anthropic, shown here for attribution only.",
+    "developersLabel": "Developers"
   },
   "footer": {
     "disclaimerLabel": "Disclaimer",
     "license": "Code released under the GPL-3.0 license.",
-    "fonts": "Interface fonts IBM Plex Sans, IBM Plex Mono, and Noto Sans SC under SIL OFL 1.1.",
+    "fonts": "Interface fonts IBM Plex Sans, IBM Plex Mono and Noto Sans SC, all under the SIL OFL 1.1.",
     "source": "Source code",
-    "noTracking": "This site uses no cookies, analytics, or external requests."
+    "noTracking": "This site uses no cookies, analytics or third-party resources.",
+    "end": "Fin.",
+    "tcOut": "TC out"
+  },
+  "host": {
+    "demoPackName": "Web demo colors",
+    "demoPackDescription": "Flat colors generated in the page, not game textures",
+    "exportTarget": "Web demo: every frame was rendered, but there is no FFmpeg in the browser, so no file was written",
+    "mcPackName": "Vanilla {{version}}",
+    "mcPackDescription": "Website demo only: from the licensed game, © Mojang / Microsoft"
+  },
+  "story": {
+    "kicker": "Workflow · three steps",
+    "title": "Three steps, from launch to export.",
+    "lead": "The design goal: under 30 seconds from opening the app to exporting your first transition, with no manual to read. The preview is rendering live the whole time; the three steps play on their own, or pick one from the tabs.",
+    "panel": "Properties",
+    "cutFrame": "Cut point: frame {{frame}}",
+    "steps": {
+      "pick": {
+        "kicker": "Step one",
+        "title": "Pick a template.",
+        "body": "Transitions or overlays. Scroll and the preview switches templates — every frame is being rendered in your browser right now.",
+        "more": "Just a few of them — the library keeps growing",
+        "tab": "Pick"
+      },
+      "tune": {
+        "kicker": "Step two",
+        "title": "Tweak a few parameters.",
+        "body": "Columns, order, flip… every change lands in the preview on the next frame. The properties panel is generated from the template’s manifest.",
+        "tab": "Tweak"
+      },
+      "export": {
+        "kicker": "Step three",
+        "title": "Export, drop it in your editor.",
+        "body": "Choose format, resolution and frame rate. Every exported frame matches the preview; put the clip on an upper track and line the cut point up with the seam between two shots.",
+        "tab": "Export"
+      }
+    },
+    "stepsLabel": "The three steps"
+  },
+  "cut": {
+    "kicker": "The cut",
+    "titleA": "That was the cut.",
+    "titleB": "Now it’s your turn.",
+    "body": "What just covered your screen was the {{template}} template itself, rendered live in your browser by the app’s engine and laid over the seam between two sections — exactly how the clip is used in your editor. Below is the desktop editor, also running right here in your browser.",
+    "hud": "The cut · {{template}} · rendered live"
   }
 }

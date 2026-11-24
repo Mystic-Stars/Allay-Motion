@@ -1,186 +1,53 @@
-// 官网独立的轻量化引擎宿主：直接复用 @allay/engine、@allay/assets 和 @allay/template-sdk，
-// 不经 window.allay，不依赖 apps/desktop 的任何代码。
-import { decodePng } from '@allay/assets';
-import type { EngineApi, HostCallbacks } from '@allay/engine';
-import {
-  FrameStatsSchema,
-  LoadResultSchema,
-  defaultParams,
-  type FrameQuality,
-  type FrameStats,
-  type LoadRequest,
-  type LoadResult,
-  type ParamValues,
-  type ResourceKind,
-  type ResourcePayload,
-} from '@allay/template-sdk';
-import * as Comlink from 'comlink';
-import { demoTexture } from '../../host/demo-pack';
-import { mcGameVersion, mcTexture } from '../../host/mc-pack';
-import { showcaseBundle, type SiteTemplateEntry } from '../../host/templates';
-import type { SiteLanguage } from '../prefs';
+// 落地页上的实时画面（首屏预览、模板卡片、窄屏仿真器）用的都是桌面版渲染进程的真实代码：
+// EngineHost（Worker、Comlink、看门狗）、resource-client（贴图解码、字体）、gallery/covers（模板封面和帧网格）。
+// 它们经 window.allay 取模板和资源，所以落地页自己的窗口里也装一份浏览器宿主。
+// 这个模块是懒加载的：首屏的文字先出来，引擎和 three 的代码块随后才下载。
+import { defaultParams, type ParamValues } from '@allay/template-sdk';
+import { EngineHost } from '../../../../desktop/src/renderer/engine-host/EngineHost';
+import { createResolver, loadStamp } from '../../../../desktop/src/renderer/engine-host/resource-client';
+import { covers, useCoverStore, coverKey, COVER_FPS, COVER_W, COVER_H } from '../../../../desktop/src/renderer/features/gallery/covers';
+import { useResourceStore } from '../../../../desktop/src/renderer/stores/resourceStore';
+import { sourceFromBundle, type TemplateSource } from '../../../../desktop/src/renderer/templates/catalog';
+import type { TemplateEntry } from '../../../../desktop/src/shared/templates';
+import type { SiteLanguage } from '../../host/bridge';
+import { createBrowserHost, installBrowserHost } from '../../host/browser-host';
+import { builtinBundle, builtinEntries } from '../../host/templates';
+import { getPrefs, subscribePrefs } from '../prefs';
+import { hostMessages } from '../i18n';
 
-const WATCHDOG_MS = { load: 10_000, previewFrame: 5_000, exportFrame: 30_000 } as const;
-export const SITE_RESOURCE_STAMP = mcGameVersion ? 'site-mc-v1' : 'site-demo-v1';
+export { covers, useCoverStore, coverKey, COVER_FPS, COVER_W, COVER_H };
 
-async function inflate(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+let ready: Promise<void> | null = null;
+
+/** 装上浏览器宿主（只装一次），把资源栈状态交给渲染进程的 resourceStore */
+export function ensureRuntime(): Promise<void> {
+  ready ??= (async () => {
+    const prefs = getPrefs();
+    const host = createBrowserHost({ settings: { theme: prefs.theme, language: prefs.language }, messages: hostMessages() });
+    installBrowserHost(host.api);
+    subscribePrefs(() => {
+      const p = getPrefs();
+      host.applySettings({ theme: p.theme, language: p.language });
+    });
+    useResourceStore.getState().replace(await window.allay.resources.layers());
+  })();
+  return ready;
 }
 
-interface CachedTexture {
-  width: number;
-  height: number;
-  data: Uint8Array;
-  mcmeta: string | null;
+export function templateEntries(): TemplateEntry[] {
+  return builtinEntries();
 }
 
-const decodedCache = new Map<string, Promise<CachedTexture | null>>();
-
-/** 官网资源解析：只提供贴图（官网原版贴图 → 网页演示纯色块），字体/音效返回 null 由引擎退回系统字体与静音 */
-async function resolveSiteResource(kind: ResourceKind, id: string): Promise<ResourcePayload | null> {
-  if (kind !== 'texture') return null;
-  let pending = decodedCache.get(id);
-  if (!pending) {
-    pending = (async (): Promise<CachedTexture | null> => {
-      const vanilla = await mcTexture(id);
-      const raw = vanilla ?? (await demoTexture(id).then((png) => (png ? { png, mcmeta: null } : null)));
-      if (!raw) return null;
-      const img = await decodePng(raw.png, inflate);
-      return { width: img.width, height: img.height, data: img.data, mcmeta: raw.mcmeta };
-    })().catch((error: unknown) => {
-      console.warn(`[site-engine] texture ${id} failed`, error);
-      decodedCache.delete(id);
-      return null;
-    });
-    decodedCache.set(id, pending);
-  }
-  const cached = await pending;
-  if (!cached) return null;
-  return {
-    kind: 'rgba',
-    width: cached.width,
-    height: cached.height,
-    data: cached.data.slice(),
-    ...(cached.mcmeta !== null ? { mcmeta: cached.mcmeta } : {}),
-  };
+export function templateSource(entry: TemplateEntry): TemplateSource | null {
+  const bundle = builtinBundle(entry.id, entry.version);
+  return bundle ? sourceFromBundle(bundle) : null;
 }
 
-let workerSeq = 0;
-
-/** 轻量化引擎宿主：创建独立 Worker、转移贴图缓冲、带看门狗超时和干净释放 */
-export class SiteEngineHost {
-  private readonly worker: Worker;
-  private readonly api: Comlink.Remote<EngineApi>;
-  private deadError: Error | null = null;
-  private released = false;
-  private rejectDeath!: (error: Error) => void;
-  private readonly death: Promise<never>;
-
-  private constructor(name: string) {
-    this.death = new Promise<never>((_resolve, reject) => {
-      this.rejectDeath = reject;
-    });
-    this.death.catch(() => undefined);
-    this.worker = new Worker(new URL('./engine.worker.ts', import.meta.url), { type: 'module', name });
-    this.worker.addEventListener('error', (event) => {
-      event.preventDefault();
-      this.die(new Error(`site engine worker error: ${event.message || 'unknown'}`));
-    });
-    this.worker.addEventListener('messageerror', () => {
-      this.die(new Error('site engine worker sent an unreadable message'));
-    });
-    this.api = Comlink.wrap<EngineApi>(this.worker);
-  }
-
-  static async create(mode: 'preview' | 'export', canvasEl?: HTMLCanvasElement): Promise<SiteEngineHost> {
-    const host = new SiteEngineHost(`site-engine-${mode}-${++workerSeq}`);
-    const callbacks: HostCallbacks = {
-      resolveResource: async (kind, id) => {
-        const payload = await resolveSiteResource(kind, id);
-        if (!payload) return null;
-        if (payload.kind === 'rgba' && payload.data.buffer instanceof ArrayBuffer) {
-          return Comlink.transfer(payload, [payload.data.buffer]);
-        }
-        return payload;
-      },
-      log: () => undefined,
-    };
-    const offscreen = mode === 'preview' ? canvasEl?.transferControlToOffscreen() : undefined;
-    if (mode === 'preview' && !offscreen) throw new Error('preview engine requires a canvas');
-    try {
-      await host.call('init', WATCHDOG_MS.load, () =>
-        host.api.init(Comlink.transfer({ canvas: offscreen, mode, strictDeterminism: false }, offscreen ? [offscreen] : []), Comlink.proxy(callbacks)),
-      );
-    } catch (error) {
-      host.dispose();
-      throw error;
-    }
-    return host;
-  }
-
-  get dead(): boolean {
-    return this.deadError !== null;
-  }
-
-  async load(req: LoadRequest): Promise<LoadResult> {
-    return LoadResultSchema.parse(await this.call('load', WATCHDOG_MS.load, () => this.api.load(req)));
-  }
-
-  async setParams(params: ParamValues): Promise<LoadResult> {
-    return LoadResultSchema.parse(await this.call('setParams', WATCHDOG_MS.load, () => this.api.setParams(params)));
-  }
-
-  async resize(width: number, height: number): Promise<void> {
-    await this.call('resize', WATCHDOG_MS.previewFrame, () => this.api.resize(width, height));
-  }
-
-  async render(t: number, quality?: FrameQuality): Promise<FrameStats> {
-    return FrameStatsSchema.parse(await this.call('render', WATCHDOG_MS.previewFrame, () => this.api.render(t, quality)));
-  }
-
-  async renderFrame(index: number, quality: FrameQuality): Promise<Uint8Array<ArrayBuffer>> {
-    const buf = await this.call('renderFrame', WATCHDOG_MS.exportFrame, () => this.api.renderFrame(index, quality));
-    if (!(buf instanceof ArrayBuffer)) throw new Error('renderFrame returned no pixels');
-    return new Uint8Array(buf);
-  }
-
-  dispose(): void {
-    if (!this.deadError) {
-      void this.api.dispose().catch(() => undefined);
-      this.deadError = new Error('site engine disposed');
-      this.rejectDeath(this.deadError);
-    }
-    if (this.released) return;
-    this.released = true;
-    try {
-      this.api[Comlink.releaseProxy]();
-    } catch {
-      // Worker 已经关闭
-    }
-    this.worker.terminate();
-  }
-
-  private die(error: Error): void {
-    if (this.deadError) return;
-    this.deadError = error;
-    this.worker.terminate();
-    this.rejectDeath(error);
-  }
-
-  private async call<T>(operation: string, timeoutMs: number, fn: () => Promise<T>): Promise<T> {
-    if (this.deadError) throw this.deadError;
-    const timer = window.setTimeout(() => this.die(new Error(`site engine timeout: ${operation}`)), timeoutMs);
-    try {
-      return await Promise.race([fn(), this.death]);
-    } finally {
-      window.clearTimeout(timer);
-    }
-  }
-}
-
+/**
+ * 浏览器有没有 WebGL2（引擎需要它；没有时页面给一句说明，不白屏）。
+ * 只试一次，并且马上释放试探用的上下文：浏览器同时活着的 WebGL 上下文有上限，超出时最早的会被丢掉。
+ */
 let webgl2: boolean | null = null;
-/** 探测浏览器是否支持 WebGL2 并立即释放试探上下文 */
 export function hasWebgl2(): boolean {
   if (webgl2 !== null) return webgl2;
   try {
@@ -201,11 +68,11 @@ export interface LiveState {
 }
 
 /**
- * 实时预览画布：预览模式 SiteEngineHost，按需调度 requestAnimationFrame
- * （不可见或暂停且无待画帧时立刻停转，不空耗 GPU/CPU）。
+ * 一块实时预览画布：预览模式的 EngineHost，自己的 requestAnimationFrame 循环。
+ * 和应用的预览一样：按输出规格（1920×1080、60 fps）装载，画布按显示尺寸 × 设备像素比 resize。
  */
 export class LivePreview {
-  private host: SiteEngineHost | null = null;
+  private host: EngineHost | null = null;
   private duration = 1;
   private cutTime: number | null = null;
   private time = 0;
@@ -217,23 +84,26 @@ export class LivePreview {
   private dirty = true;
   private loading: Promise<void> = Promise.resolve();
   private disposed = false;
+  private source: TemplateSource | null = null;
   private params: ParamValues = {};
   private pendingParams: ParamValues | null = null;
   private loadedId: string | null = null;
-  private lastW = 0;
-  private lastH = 0;
+  locale: SiteLanguage = 'en';
+  /** 播完一遍后不循环，停在片尾（剪辑点的整幅转场由滚动驱动，不自己播） */
+  loop = true;
   private listeners = new Set<(s: LiveState) => void>();
-
-  userPaused = false;
+  /** 每播完一遍调用（首屏用它自动换下一个模板） */
   onLoop: (() => void) | null = null;
 
-  private constructor() {}
+  private constructor(private readonly canvas: HTMLCanvasElement) {}
 
   static async create(canvas: HTMLCanvasElement): Promise<LivePreview> {
-    const live = new LivePreview();
-    live.host = await SiteEngineHost.create('preview', canvas);
+    await ensureRuntime();
+    const live = new LivePreview(canvas);
+    const source = (): TemplateSource['assets'] => live.source?.assets ?? null;
+    live.host = await EngineHost.create({ mode: 'preview', canvas, resolveResource: createResolver(source) });
     live.tick = live.tick.bind(live);
-    live.scheduleTick();
+    live.raf = requestAnimationFrame(live.tick);
     return live;
   }
 
@@ -252,43 +122,55 @@ export class LivePreview {
     for (const l of this.listeners) l(s);
   }
 
-  private scheduleTick(): void {
-    if (this.disposed || this.raf !== 0) return;
-    if (!this.visible || (!this.playing && !this.dirty)) return;
-    this.raf = requestAnimationFrame(this.tick);
-  }
-
-  show(entry: SiteTemplateEntry, locale: SiteLanguage, overrides?: ParamValues, startAtCut = false): Promise<void> {
+  /**
+   * 换模板（参数取默认值，overrides 覆盖其中几项；语言影响带文字的模板）。
+   * output 默认是应用的 1920×1080、60 fps；剪辑点的整幅转场按视口的宽高比装载。
+   */
+  show(entry: TemplateEntry, locale: SiteLanguage, overrides?: ParamValues, output?: { width: number; height: number }): Promise<void> {
     this.pendingParams = null;
     return this.queue(async () => {
       const host = this.host;
-      const bundle = showcaseBundle(entry.id);
-      if (!host || !bundle || this.disposed) return;
-      const params = { ...defaultParams(bundle.entry.manifest.params ?? [], { locale }), ...overrides };
+      const source = templateSource(entry);
+      if (!host || !source || this.disposed) return;
+      this.source = source;
+      this.locale = locale;
+      const params = { ...defaultParams(source.params, { locale }), ...overrides };
       const result = await host.load({
-        manifest: bundle.entry.manifest,
-        code: bundle.code,
+        manifest: source.manifest,
+        code: source.code,
         params,
-        output: { width: 1920, height: 1080, fps: 60 },
-        resourceStamp: SITE_RESOURCE_STAMP,
+        output: { width: output?.width ?? 1920, height: output?.height ?? 1080, fps: 60 },
+        resourceStamp: loadStamp(source.assets),
         locale,
       });
-      if (this.disposed) return;
       this.params = params;
       this.loadedId = entry.id;
       this.duration = result.duration;
       this.cutTime = result.cutTime;
-      this.time = startAtCut ? (result.cutTime ?? result.duration * 0.5) : Math.min(this.time, this.duration);
+      this.time = Math.min(this.time, this.duration);
       this.dirty = true;
       this.emit();
-      this.scheduleTick();
     });
   }
 
+  /** 当前播放头的时刻（秒） */
+  get currentTime(): number {
+    return this.time;
+  }
+
+  get isPlaying(): boolean {
+    return this.playing;
+  }
+
+  /** 当前装着的模板 */
   get templateId(): string | null {
     return this.loadedId;
   }
 
+  /**
+   * 改几项参数（不换模板）：和应用里拖属性面板一样走引擎的 setParams。
+   * 滚动驱动时调用得很密，这里只保留最新的一份，前一次没做完的不排队。
+   */
   setParams(overrides: ParamValues): void {
     const first = this.pendingParams === null;
     this.pendingParams = { ...this.params, ...overrides };
@@ -296,98 +178,104 @@ export class LivePreview {
     void this.queue(async () => {
       const next = this.pendingParams;
       this.pendingParams = null;
-      if (!next || !this.host || this.disposed) return;
+      if (!next || !this.host) return;
       const result = await this.host.setParams(next);
-      if (this.disposed) return;
       this.params = next;
       this.duration = result.duration;
       this.cutTime = result.cutTime;
       this.time = Math.min(this.time, this.duration);
       this.dirty = true;
       this.emit();
-      this.scheduleTick();
     });
   }
 
+  /** 读预览画布在 t 时刻的像素（测试用：整幅转场在剪辑点是不是铺满） */
+  async readPixels(t: number): Promise<Uint8Array | null> {
+    let out: Uint8Array | null = null;
+    await this.queue(async () => {
+      out = (await this.host?.readPreview(t)) ?? null;
+    });
+    return out;
+  }
+
+  /** 引擎调用排成一队（装载、resize、渲染不交错）；一步失败不连累后面的 */
+  private queue(fn: () => Promise<void>): Promise<void> {
+    const run = this.loading.then(() => (this.disposed ? undefined : fn()));
+    this.loading = run.catch((error: unknown) => {
+      if (!this.disposed) console.warn('[live] engine call failed', error);
+    });
+    return this.loading;
+  }
+
+  /** 画布的设备像素尺寸 */
   resize(width: number, height: number): void {
     const w = Math.max(16, Math.round(width));
     const h = Math.max(16, Math.round(height));
-    if (w === this.lastW && h === this.lastH) return;
-    this.lastW = w;
-    this.lastH = h;
     void this.queue(async () => {
-      if (!this.host || this.disposed) return;
-      await this.host.resize(w, h);
+      await this.host?.resize(w, h);
       this.dirty = true;
-      this.scheduleTick();
     });
   }
+
+  /** 用户自己按了暂停（外面的驱动不再替他恢复播放） */
+  userPaused = false;
 
   setPlaying(playing: boolean, byUser = false): void {
     this.playing = playing;
     if (byUser) this.userPaused = !playing;
     this.last = performance.now();
     this.emit();
-    this.scheduleTick();
   }
 
   seek(t: number): void {
     this.time = Math.min(this.duration, Math.max(0, t));
     this.dirty = true;
     this.emit();
-    this.scheduleTick();
   }
 
+  /** 不在视口里时不画（不占显卡） */
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.last = performance.now();
-    this.scheduleTick();
-  }
-
-  private queue(fn: () => Promise<void>): Promise<void> {
-    const run = this.loading.then(() => (this.disposed ? undefined : fn()));
-    this.loading = run.catch((error: unknown) => {
-      if (!this.disposed) console.warn('[site-engine] call failed', error);
-    });
-    return this.loading;
   }
 
   private tick(now: number): void {
-    this.raf = 0;
-    if (this.disposed || !this.visible) return;
+    if (this.disposed) return;
+    this.raf = requestAnimationFrame(this.tick);
     const dt = Math.min(0.1, Math.max(0, (now - (this.last || now)) / 1000));
     this.last = now;
+    if (!this.visible || !this.host || this.host.dead) return;
     if (this.playing) {
+      // 片尾留 0.35 秒的空，循环的接缝看得清
       const span = this.duration + 0.35;
       let t = this.time + dt;
       if (t >= span) {
         t %= span;
         this.onLoop?.();
       }
+      if (!this.loop && t >= this.duration) {
+        // 不循环的（剪辑点的转场）：播到片尾就停
+        t = this.duration;
+        this.playing = false;
+      }
       this.time = t;
       this.dirty = true;
       this.emit();
     }
-    if (this.dirty && !this.busy && this.host && !this.host.dead) {
-      this.busy = true;
-      this.dirty = false;
-      const t = Math.min(this.duration, this.time);
-      void this.queue(async () => {
-        await this.host?.render(t);
-      }).finally(() => {
-        this.busy = false;
-        this.scheduleTick();
-      });
-    }
-    this.scheduleTick();
+    if (!this.dirty || this.busy) return;
+    this.busy = true;
+    this.dirty = false;
+    const t = Math.min(this.duration, this.time);
+    void this.queue(async () => {
+      await this.host?.render(t);
+    }).finally(() => {
+      this.busy = false;
+    });
   }
 
   dispose(): void {
     this.disposed = true;
-    if (this.raf !== 0) {
-      cancelAnimationFrame(this.raf);
-      this.raf = 0;
-    }
+    cancelAnimationFrame(this.raf);
     this.host?.dispose();
     this.host = null;
     this.listeners.clear();

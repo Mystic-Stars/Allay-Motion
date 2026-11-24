@@ -1,8 +1,7 @@
 // 访客的主题、语言偏好。默认跟随系统，手动选过的记在 localStorage（只是这个浏览器里的便利，读写失败就当没有）。
 import { useSyncExternalStore } from 'react';
+import type { SiteLanguage, SiteTheme } from '../host/bridge';
 
-export type SiteTheme = 'dark' | 'light';
-export type SiteLanguage = 'zh-CN' | 'en';
 export type ThemePref = 'system' | SiteTheme;
 
 const THEME_KEY = 'allay-site-theme';

@@ -140,24 +140,6 @@ function shuffled(n: number): number[] {
   return order;
 }
 
-/** 抽样选取用于跨 Worker 确定性比对的代表帧索引（覆盖首帧、出入段、剪辑点/中点、末帧） */
-function pickSampleIndices(total: number, cutIndex: number | null, count: number): number[] {
-  if (total <= 0) return [];
-  if (count <= 0 || count >= total) return Array.from({ length: total }, (_, i) => i);
-  const last = total - 1;
-  const set = new Set<number>([0, last]);
-  if (cutIndex !== null) set.add(Math.min(last, Math.max(0, cutIndex)));
-  else set.add(Math.round(last / 2));
-  for (const frac of [0.05, 0.25, 0.75, 0.95]) {
-    if (set.size >= count) break;
-    set.add(Math.min(last, Math.max(0, Math.round(last * frac))));
-  }
-  for (let i = 1; set.size < count && i < count; i++) {
-    set.add(Math.min(last, Math.max(0, Math.round((last * i) / (count - 1)))));
-  }
-  return [...set].sort((a, b) => a - b);
-}
-
 /** rt-probe.js 的结果 */
 interface RtProbeResult {
   renderer: string;
@@ -227,21 +209,11 @@ const harness = {
 
   /**
    * T-TPL-3/4：装载一个模板，返回 warnings、时长、剪辑点，首帧、剪辑点那一帧（round(cutTime × fps)）、末帧的 alpha 极值。
-   * hashes 为真时另做 T-ENG-1：顺序渲染一遍、在另一个 Worker 里乱序渲染一遍，逐帧比较 SHA-256。
-   * 传了 sample 时只抽样比较代表帧（并可降尺度），不把整段所有帧反复双 Worker 全量渲染（全量压力模式才不传 sample）。
+   * hashes 为真时另做 T-ENG-1：全部帧顺序渲染一遍、在另一个 Worker 里乱序渲染一遍，逐帧比较 SHA-256。
    */
-  async tplCheck(
-    name: TemplateKey,
-    output: OutputSettings,
-    quality: FrameQuality,
-    params: ParamValues,
-    hashes: boolean,
-    sample?: { frames: number; output?: OutputSettings; quality?: FrameQuality },
-  ) {
-    let primary: Awaited<ReturnType<typeof exportEngine>> | null = await exportEngine(name, output, params);
-    let seqEngine: Awaited<ReturnType<typeof exportEngine>> | null = null;
+  async tplCheck(name: TemplateKey, output: OutputSettings, quality: FrameQuality, params: ParamValues, hashes: boolean) {
+    const { host, loaded } = await exportEngine(name, output, params);
     try {
-      const { host, loaded } = primary;
       const total = frameCount(loaded.duration, output.fps);
       const cutIndex = loaded.cutTime === null ? null : Math.round(loaded.cutTime * output.fps);
       const first = alphaOf(await host.renderFrame(0, quality));
@@ -250,54 +222,38 @@ const harness = {
       const cut = cutPixels === null ? null : { ...alphaOf(cutPixels), ...belowOpaque(cutPixels, output.width) };
       let deterministic: boolean | null = null;
       let distinct = 0;
-      let checkedFrames = 0;
       let mismatched: number[] = [];
       // 不一致时的诊断：两个 Worker 各重渲染一次，看是哪一边、差多少（docs/decisions.md M3“引擎里两处确定性问题”）
       const debug: unknown[] = [];
       if (hashes) {
-        const detOutput = sample?.output ?? output;
-        const detQuality = sample?.quality ?? quality;
-        const sameSpec = detOutput.width === output.width && detOutput.height === output.height && detOutput.fps === output.fps;
-        if (!sameSpec) {
-          primary.host.dispose();
-          primary = null;
-          seqEngine = await exportEngine(name, detOutput, params);
-        }
-        const seqTarget = sameSpec ? primary! : seqEngine!;
-        const detTotal = frameCount(seqTarget.loaded.duration, detOutput.fps);
-        const detCut = seqTarget.loaded.cutTime === null ? null : Math.round(seqTarget.loaded.cutTime * detOutput.fps);
-        const indices = sample ? pickSampleIndices(detTotal, detCut, sample.frames) : Array.from({ length: detTotal }, (_, i) => i);
-        checkedFrames = indices.length;
         const seq: string[] = [];
-        for (const frameIdx of indices) seq.push(await sha256(await seqTarget.host.renderFrame(frameIdx, detQuality)));
-        const other = await exportEngine(name, detOutput, params);
+        for (let i = 0; i < total; i++) seq.push(await sha256(await host.renderFrame(i, quality)));
+        const other = await exportEngine(name, output, params);
         try {
-          const shuf: string[] = new Array<string>(indices.length);
-          for (const pos of shuffled(indices.length)) shuf[pos] = await sha256(await other.host.renderFrame(indices[pos]!, detQuality));
-          mismatched = seq.flatMap((h, pos) => (h === shuf[pos] ? [] : [indices[pos]!]));
-          for (let pos = 0; pos < indices.length; pos++) {
-            if (seq[pos] === shuf[pos]) continue;
-            const frameIdx = indices[pos]!;
-            const a = await seqTarget.host.renderFrame(frameIdx, detQuality);
-            const b = await other.host.renderFrame(frameIdx, detQuality);
+          const shuf: string[] = new Array<string>(total);
+          for (const i of shuffled(total)) shuf[i] = await sha256(await other.host.renderFrame(i, quality));
+          mismatched = seq.flatMap((h, i) => (h === shuf[i] ? [] : [i]));
+          for (const i of mismatched) {
+            const a = await host.renderFrame(i, quality);
+            const b = await other.host.renderFrame(i, quality);
             let diff = 0;
             let maxd = 0;
-            let firstDiff = -1;
+            let first = -1;
             // 两边再各渲染一次之后仍不同的像素：(x, y, 顺序那一边的 RGBA, 乱序那一边的 RGBA)，最多 4 个
             const pixels: [number, number, number[], number[]][] = [];
             for (let k = 0; k < a.length; k++) {
               const d = Math.abs(a[k]! - b[k]!);
               if (d) {
                 diff++;
-                if (firstDiff < 0) firstDiff = k;
+                if (first < 0) first = k;
                 const p = k >> 2;
-                if (pixels.length < 4 && (pixels.length === 0 || pixels[pixels.length - 1]![0] + pixels[pixels.length - 1]![1] * detOutput.width !== p)) {
-                  pixels.push([p % detOutput.width, Math.floor(p / detOutput.width), Array.from(a.subarray(p * 4, p * 4 + 4)), Array.from(b.subarray(p * 4, p * 4 + 4))]);
+                if (pixels.length < 4 && (pixels.length === 0 || pixels[pixels.length - 1]![0] + pixels[pixels.length - 1]![1] * output.width !== p)) {
+                  pixels.push([p % output.width, Math.floor(p / output.width), Array.from(a.subarray(p * 4, p * 4 + 4)), Array.from(b.subarray(p * 4, p * 4 + 4))]);
                 }
               }
               if (d > maxd) maxd = d;
             }
-            debug.push({ i: frameIdx, seq: seq[pos]!.slice(0, 8), shuf: shuf[pos]!.slice(0, 8), again1: (await sha256(a)).slice(0, 8), again2: (await sha256(b)).slice(0, 8), diff, maxd, firstPixel: firstDiff >> 2, pixels });
+            debug.push({ i, seq: seq[i]!.slice(0, 8), shuf: shuf[i]!.slice(0, 8), again1: (await sha256(a)).slice(0, 8), again2: (await sha256(b)).slice(0, 8), diff, maxd, firstPixel: first >> 2, pixels });
           }
           deterministic = mismatched.length === 0;
         } finally {
@@ -305,10 +261,9 @@ const harness = {
         }
         distinct = new Set(seq).size;
       }
-      return { warnings: loaded.warnings, duration: loaded.duration, cutTime: loaded.cutTime, cues: loaded.audioCues.length, total, checkedFrames, cutIndex, first, last, cut, deterministic, mismatched, distinct, debug };
+      return { warnings: loaded.warnings, duration: loaded.duration, cutTime: loaded.cutTime, cues: loaded.audioCues.length, total, cutIndex, first, last, cut, deterministic, mismatched, distinct, debug };
     } finally {
-      primary?.host.dispose();
-      seqEngine?.host.dispose();
+      host.dispose();
     }
   },
 

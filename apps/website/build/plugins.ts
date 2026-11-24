@@ -1,7 +1,8 @@
 // 官网构建用的 Vite 插件。
 //
-// 1. virtual:allay-builtin-templates：只打包官网精选展示用的固定 5 个内置模板（SHOWCASE_TEMPLATE_IDS），
-//    不再随主程序新增模板自动同步、膨胀网站体积；打包函数仍复用 scripts/build-templates.ts 的校验和打包逻辑。
+// 1. virtual:allay-builtin-templates：用 pnpm templates:build 同一份打包函数（esbuild + 导入检查 + 确定性规则）
+//    现场把 packages/templates/* 打成单文件 ESM，连同 manifest 一起交给页面。packages/templates 下多一个模板，
+//    官网就多一个，不用改官网代码（tests/engine/vite.config.ts 用的是同一个办法）。
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Plugin } from 'vite';
@@ -11,39 +12,19 @@ import { bundleTemplate, readTemplateManifest, templateDirs } from '../../../scr
 const VIRTUAL = 'virtual:allay-builtin-templates';
 const ROOT = resolve(import.meta.dirname, '../../..');
 
-/** 官网固定展示的 5 个精选模板；主程序再加新模板也不会自动同步进官网 */
-export const SHOWCASE_TEMPLATE_IDS = [
-  'allay.builtin.block-wipe',
-  'allay.builtin.block-fall',
-  'allay.builtin.item-stinger',
-  'allay.builtin.pixel-dissolve',
-  'allay.builtin.advancement-toast',
-] as const;
-
 export function builtinTemplates(): Plugin {
   return {
     name: 'allay-website-builtin-templates',
     resolveId: (id) => (id === VIRTUAL ? `\0${VIRTUAL}` : null),
     async load(id) {
       if (id !== `\0${VIRTUAL}`) return null;
-      const wanted = new Map<string, number>(SHOWCASE_TEMPLATE_IDS.map((tplId, idx) => [tplId, idx]));
-      const picked: { order: number; manifest: unknown; code: string }[] = [];
+      const out: { manifest: unknown; code: string }[] = [];
       for (const dir of templateDirs()) {
         const manifest = readTemplateManifest(dir);
-        const tplId = typeof manifest.id === 'string' ? manifest.id : '';
-        const order = wanted.get(tplId);
-        if (order === undefined) continue;
         this.addWatchFile(resolve(dir, 'manifest.json'));
         this.addWatchFile(resolve(dir, 'src/index.ts'));
-        picked.push({ order, manifest, code: await bundleTemplate(dir) });
+        out.push({ manifest, code: await bundleTemplate(dir) });
       }
-      if (picked.length !== SHOWCASE_TEMPLATE_IDS.length) {
-        const found = new Set(picked.map((p) => (p.manifest as { id: string }).id));
-        const missing = SHOWCASE_TEMPLATE_IDS.filter((x) => !found.has(x));
-        throw new Error(`website showcase templates missing: ${missing.join(', ')}`);
-      }
-      picked.sort((a, b) => a.order - b.order);
-      const out = picked.map(({ manifest, code }) => ({ manifest, code }));
       return `export default ${JSON.stringify(out)};`;
     },
   };
