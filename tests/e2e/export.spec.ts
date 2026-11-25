@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { decodeAllRgba, probe, processAlive } from '../export/ffmpeg';
 import { frameCount } from '../../packages/engine/src/frames';
-import { ROOT, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched } from './helpers';
+import { ROOT, SOFTWARE_TIMEOUT_FACTOR, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched } from './helpers';
 import { isSoftwareRenderer } from '../engine/software';
 
 // M7 导出完善的端到端测试（docs/05-export.md 5.10、docs/08-milestones.md M7）：
@@ -88,8 +88,11 @@ test.describe('六个内置模板：1080p60 标准画质导出', () => {
 
   for (const id of ['block-wipe', 'block-fall', 'item-stinger', 'loading-screen', 'pixel-dissolve', 'advancement-toast']) {
     test(`allay.builtin.${id}：时长、帧数、首末帧透明、剪辑点不透明、色彩标记`, async () => {
-      test.setTimeout(120_000);
       const { page } = launched;
+      // 软件渲染（CI 的 WARP）下同样的帧数慢得多：测试时限和等导出结束的时限按 docs/decisions.md M8 的做法乘 SOFTWARE_TIMEOUT_FACTOR，
+      // 判定不变。进度提示按游戏还原以后（1191592）默认长 5.6 秒、337 帧，原来的 3 秒只有 181 帧，CI 上 90 秒不够
+      const slow = isSoftwareRenderer(await rendererOf(page)) ? SOFTWARE_TIMEOUT_FACTOR : 1;
+      test.setTimeout(120_000 * slow);
       const templates = (await page.evaluate(() => window.__allayTest!.templates())) as { id: string; version: string }[];
       const entry = templates.find((t) => t.id === `allay.builtin.${id}`)!;
       expect(entry, id).toBeTruthy();
@@ -98,7 +101,7 @@ test.describe('六个内置模板：1080p60 标准画质导出', () => {
 
       const started = Date.now();
       const { taskId } = await command<{ taskId: string }>(page, 'exportTask.start', { preset: 'prores4444', quality: 'standard' });
-      const task = await waitTask(page, taskId, 90_000);
+      const task = await waitTask(page, taskId, 90_000 * slow);
       const seconds = (Date.now() - started) / 1000;
       expect(task.status, JSON.stringify(task.error)).toBe('done');
       const r = task.result!;
@@ -154,7 +157,8 @@ test.describe('导出对话框与任务', () => {
         const started = Date.now();
         await page.getByTestId('export-start').click();
         const result = page.getByTestId('export-result');
-        await expect(result).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+        // 测试时限在 launchApp 里已按软件渲染放宽；等这一次导出结束的时限同样放宽（判定不变，docs/decisions.md M8）
+        await expect(result).toHaveAttribute('data-kind', 'done', { timeout: 60_000 * (software ? SOFTWARE_TIMEOUT_FACTOR : 1) });
         const seconds = (Date.now() - started) / 1000;
         timings.push(`${preset} ${seconds.toFixed(2)}`);
         // 预算：1080p60、标准画质 ≤ 20 秒（2.11）。软件渲染（CI 的 WARP）不是参考机器，只记数字、不判定（同 T-ARC-7，docs/decisions.md M8）
