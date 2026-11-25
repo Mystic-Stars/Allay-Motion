@@ -1790,6 +1790,10 @@ GitHub 的 Windows 机器没有显卡。Chromium 的 WebGL 走 **WARP**，渲染
   - 用户于 2026-11-14 明确批准提取 `assets/minecraft/textures/entity/allay/allay.png`（原话「我允许」），范围是这一个文件、仅用于官网首屏体素悦灵取色。`pnpm website:mc` 照旧从本机正版 jar 提取（脚本里的 `WEBSITE_EXTRA_FILES`），放在 `apps/website/public/mc/` 下与 jar 内相同的路径，和其余文件同样处理（进分支、`index.json` 记 SHA-256、`ASSETS_PROVENANCE.json` 的 mojang 记录覆盖、`check-provenance` 的范围校验）。现在共 183 个文件、46.0 KB。共享包不引用它，只有官网的宿主层（`motion/world/World.tsx` 经 `host/mc-pack.ts`）读；文件缺失时官网自动退回“首屏不拼体素悦灵”。
   - 用户于 2026-11-14 明确批准使用模型（原话「我允许用模型」）。实际用到的是 `packages/mascot` 里已有的悦灵模型定义（`allay.model.ts` 的长方体、`allay.rig.ts` 的骨架和盒子展开、`allay.motions.ts` 的动作），**未新增文件**；没有从游戏里提取模型文件，也没有反编译或提取游戏的程序代码。
   - 其他实体贴图、模型、音效、字体仍然不取；再需要别的类别先问。
+- **补充（2026-11-24）：下界传送门的动画贴图**。官网精选模板里的“传送门穿越”（`allay.builtin.portal-gate`）读 `minecraft:block/nether_portal`，它不在 `requiredTextures()` 里，官网原先只能用纯色色块代替。
+  - 批准人：维护者 khiqwq（风花叶），出处是 PR #16 的评论（2026-11-24）。他核对过两个文件与 1.21.1 jar 里的原文件 SHA-256 一致，并移除了本机预览用的中间件（bbe9353 加、23b7bf7 删）。
+  - 范围只限两个文件：`assets/minecraft/textures/block/nether_portal.png` 和 `nether_portal.png.mcmeta`，只在官网使用（`apps/website/public/mc/` 下，路径与 jar 相同）。处理方式与悦灵贴图相同：`pnpm website:mc` 经 `WEBSITE_EXTRA_FILES` 从本机正版 jar 提取，`index.json` 记 SHA-256，`ASSETS_PROVENANCE.json` 的 mojang 记录覆盖，`check-provenance` 校验。现在共 185 个文件、54.8 KB。
+  - 桌面应用、`packages/*`、安装包、测试夹具不受影响；其他原版文件照旧不取。
 
 ### 测试与命令
 
@@ -2712,3 +2716,24 @@ PR #5 遗留清单里引擎正确性的两项（主控派发，会话短名 engi
   - **工作流与特性交互**：三步工作流由用户点击标签切换（不再被定时器抢走）；第二步「调参数」提供真正可交互的列数滑块、出场顺序图案按钮与翻转方式切换（实时走引擎 `setParams`）；第三步提供桌面版与导出进度示例；模板卡片「在顶部预览」直接切换首屏预览并滚动定位；特性卡精简为 4 张，`StackDemo` 修复为可点击选中锁定图层，透明通道演示复用 `block-fall` 封面网格而不另开 WebGL 上下文。
   - **冒烟测试**：`tests/website/website.spec.ts` 重写为精简稳定的 6 条核心测试（`T-WEB-1` 至 `T-WEB-6`）。
 
+## 官网电影级视觉升级与 1:1 真实桌面编辑器试玩台（2026-11-24）
+
+- **背景与目标**：PR #14 虽然把官网体积和 CI 测试瘦下来了，但砍掉了过多舞台与三维元素，导致第一眼缺乏惊艳感；而自绘简化调参台在外观上也与桌面应用不一致。本轮从最新 `main` 出发，在**严格冻结官网展示模板数量、不恢复全量模板同步与冗长测试**的前提下，让试玩台与桌面应用 1:1 完全同款，并引入现代浏览器视觉技术强化第一眼冲击力。
+- **冻结精选模板，避免再次随桌面端膨胀**：
+  - `apps/website/build/plugins.ts` 将 `virtual:allay-builtin-templates` 固定为 8 个视觉表现最鲜明且全部具备 `public/mc/` 真实原版贴图的代表作（`block-wipe`、`portal-gate`、`chunk-rise`、`ice-shatter`、`block-punch`、`item-stinger`、`item-swarm`、`advancement-toast`），后续主程序在 `packages/templates/` 新增模板不会自动同步进官网。
+- **1:1 真实桌面应用试玩台（`SimulatorSection.tsx` + `simulator.html` + `browser-host.ts`）**：
+  - 恢复双入口构建，`#try` 窗口内部直接运行桌面应用渲染进程本身（`apps/desktop/src/renderer/main.tsx`），包括顶栏菜单、可拖拽分栏、左侧精选模板库、中央实时预览舞台、底部多段可拖拽时间轴、右侧属性检查器（数值擦除、图案网格、原版方块选择器、预设）以及真实「导出」演练与悦灵送达编排；
+  - 窗口上方新增带原版像素图标的 8 模板快捷切换胶囊栏，下方精选模板卡片点击按钮可直接跨 `postMessage`（经 zod 校验）将对应模板载入编辑器；`< 900px` 窄屏自动切换为轻量 `LiveViewer` 预览台。
+- **首屏构图重塑与现代浏览器技术运用**：
+  - **首屏折线内完整同框 + 立体光影舞台（`Stage.tsx` + `site.css`）**：重构首屏监视器透视位姿，使右上 11,640 体素 3D 悦灵雕塑与右下斜躺的实时渲染监视器（默认播放「传送门穿越」，配 `REC · 60 FPS · ALPHA` 录制灯与取景器四角准星）100% 完整呈现在首屏视口内；背景叠加指针跟随的悦灵生物发光体积光晕（`.hero-aura`）与 3D 透视非编网格地平线（`.hero-horizon`），主行动按钮支持微磁吸跟手。
+  - **现代 CSS 与 Web API 体验**：
+    - **View Transitions API（`Nav.tsx`）**：深浅色主题切换通过 `document.startViewTransition` 从点击按钮圆心发起 `clip-path: circle()` 电影光圈擦除过渡（开启减少动效或浏览器不支持时自动即时切换）；
+    - **CSS `@property --beam-angle` 流光工作室边框（`.studio-bezel`）**：首屏 3D 监视器与 1:1 试玩台大窗外框渲染旋转锥形高光细边；
+    - **指针跟随径向聚光边框（`.card-spotlight`）+ 3D 悬停微倾**：模板 Bento 与 6 卡特性矩阵通过单层被动委托监听实时更新 `--spot-x / --spot-y` 1px 径向高光与内层柔光；
+    - **CSS Scroll-Driven Animations（`animation-timeline: view()`）与 35mm 胶片技术跑马灯**：章节背景挂载原生滚动驱动视差场记水印（`SCENE 01`–`SCENE 04`），模板区底部衔接双排齿孔胶片无限跑马灯（`FilmRibbon`）。
+  - **3D 世界软件光栅化自适应与精简验收测试**：`motion/world/` 新增 `software` 档位检测（`SwiftShader` / `Basic Render Driver` / `WARP` / `llvmpipe` 自动降至 `kMax = 2`、`dpr = 1` 并跳过景深模糊），配合 7 条核心冒烟测试（`T-WEB-1` 至 `T-WEB-7`）兼顾视觉表现与 CI 稳定性。
+- **官网重新依赖桌面版渲染进程（部分撤销 PR #14 的解耦）**：
+  - 为了让试玩台与桌面应用 1:1 一致，`simulator.html` 的入口 `src/simulator/main.ts` 直接挂桌面版渲染进程 `apps/desktop/src/renderer/main.tsx`；`src/host/browser-host.ts` 用浏览器实现替换 `window.allay`，并导入 `apps/desktop/src/shared/*` 的类型和纯函数。落地页的 `i18n.ts` 也借用了桌面版语言文件里的 `export.*`、`gallery.*` 两组文案。`apps/website/package.json` 因此重新声明了 `@allay/desktop: workspace:*`。这个依赖没有代码按包名导入，都是相对路径，它只让 pnpm 的依赖图知道官网依赖桌面端。
+  - PR #14 里“官网不能导入 apps/desktop”的规则相应放宽：落地页和仿真器可以导入渲染进程和 `shared` 的代码，跨窗消息照旧经 `src/host/bridge.ts` 的 zod 校验并核对来源窗口。
+  - 构建边界由 `eslint.config.js` 的 `deps/website` 规则保证：`apps/website/src` 不能依赖 Electron 和 Node，不能导入 `desktop/src/main`（主进程），`desktop/src/preload` 只能导入类型。被导入的渲染进程代码另由 `deps/renderer` 规则约束（同样不碰 Electron、Node、主进程），所以浏览器构建里带不进 Electron 或 Node 的运行时。
+  - 代价：桌面版渲染进程或 `shared` 改动可能连带官网构建失败，需要由 `pnpm test:website`（在 `pnpm check` 里）兜住；精选模板仍固定为 8 个，不随桌面端新增模板膨胀。

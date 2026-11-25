@@ -435,6 +435,16 @@
       "bytes": 230
     },
     {
+      "path": "assets/minecraft/textures/block/nether_portal.png",
+      "sha256": "845ceb03d82607ec15ab26d32c6e389efb9f7a118baea3944b68363c33f70172",
+      "bytes": 9005
+    },
+    {
+      "path": "assets/minecraft/textures/block/nether_portal.png.mcmeta",
+      "sha256": "802acdb8f55f30146d5ed18414b21ba35650d4e550f81825ea104131c12dc4fc",
+      "bytes": 21
+    },
+    {
       "path": "assets/minecraft/textures/block/netherrack.png",
       "sha256": "3c0208b749c5393b9bad9d57ed3d830326a02b8cbd8444e96d4d0d277f85625f",
       "bytes": 213

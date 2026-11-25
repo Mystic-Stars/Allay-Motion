@@ -133,14 +133,14 @@ const coreRules = [
     ],
   },
   {
-    // 官网（docs/decisions.md 官网）：独立纯静态页面，不依赖 Electron、Node 和桌面端源码
+    // 官网（docs/decisions.md 官网）：页面代码和渲染进程一样，不碰 Electron、Node、主进程和 preload 的运行时
     name: 'deps/website',
     files: ['apps/website/src/**/*.{ts,tsx}'],
     patterns: [
       { ...ELECTRON, message: '官网是纯静态页面，不能依赖 Electron。' },
       { ...NODE, message: '官网是纯静态页面，不能依赖 Node。' },
-      { regex: '^@allay/desktop(/|$)', message: '官网与桌面应用解耦，不能导入 @allay/desktop。' },
-      { regex: '(^|/)desktop(/|$)', message: '官网与桌面应用解耦，不能导入 apps/desktop。' },
+      { regex: '(^|/)desktop/src/main(/|$)', message: '官网不能导入桌面版主进程的代码。' },
+      { regex: '(^|/)desktop/src/preload(/|$)', allowTypeImports: true, message: '官网只能导入 preload 的类型（window.allay 由 host/browser-host.ts 实现）。' },
     ],
   },
 ];

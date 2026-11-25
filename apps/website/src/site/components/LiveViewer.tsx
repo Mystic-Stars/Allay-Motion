@@ -1,19 +1,18 @@
-// 实时预览面板：桌面版 @allay/engine 在独立 Web Worker 中实时渲染。
-// 修复并简化的交互：
-// - 工具条干净地放在画布下方，绝不遮挡预览内容（无 -mt-6 遮盖）；
-// - 时间轴默认支持指针拖动 + 键盘左右/Home/End 调节，pointerup/pointercancel 统一清理；
-// - 用户手动点击播放/暂停、切换模板或拖动时间轴后立即停止自动轮播，绝不和用户抢状态；
-// - 离开视口或开启减少动效时停止连续帧循环，只画当前静帧。
+// 实时预览监视器：桌面版 @allay/engine 在独立 Web Worker 中实时渲染。
+// 支持三种合成底幕（透明棋盘格 / 游戏黄昏山景 / 深色剪辑轨）、无遮挡控制条、窄段落文字自适应与指针/键盘精确擦除。
 import { AllayLoader } from '@allay/mascot';
 import { localize, type ParamValues } from '@allay/template-sdk';
 import { Skeleton } from '@allay/ui/components/misc';
 import { Pause, Play } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { mcGameVersion } from '../../host/mc-pack';
+import { mcGameVersion, mcTextureUrl } from '../../host/mc-pack';
 import { showcaseEntries, type SiteTemplateEntry } from '../../host/templates';
 import { LivePreview, hasWebgl2, type LiveState } from '../engine/runtime';
+import { TEMPLATE_ICON_IDS } from '../links';
 import { usePrefs } from '../prefs';
+
+export type ViewerBackdrop = 'checker' | 'footage' | 'dark';
 
 export interface LiveViewerControl {
   templateId?: string | null;
@@ -26,6 +25,8 @@ interface Props {
   scrubbable?: boolean;
   hidePicker?: boolean;
   noteHidden?: boolean;
+  noteHiddenOnNarrow?: boolean;
+  backdrop?: ViewerBackdrop;
   testId?: string;
   initialId?: string;
   requestPick?: { id: string; seq: number } | null;
@@ -38,11 +39,29 @@ type Status = 'starting' | 'ready' | 'unsupported' | 'failed';
 
 const STAGE_COLORS = ['var(--stage-enter)', 'var(--stage-hold)', 'var(--stage-exit)'];
 
+function FootageBackdrop() {
+  return (
+    <div className="preview-footage pointer-events-none absolute inset-0" aria-hidden="true">
+      <div className="absolute top-[48%] left-[68%] aspect-square w-[10%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#ffe3a8] opacity-90 blur-[2px]" />
+      <div
+        className="absolute inset-x-0 bottom-0 h-[44%] bg-[#3b3157]"
+        style={{ clipPath: 'polygon(0 40%, 12% 22%, 24% 38%, 38% 12%, 52% 34%, 66% 18%, 80% 36%, 92% 20%, 100% 30%, 100% 100%, 0 100%)' }}
+      />
+      <div
+        className="absolute inset-x-0 bottom-0 h-[27%] bg-[#231d38]"
+        style={{ clipPath: 'polygon(0 30%, 18% 50%, 34% 24%, 50% 46%, 70% 20%, 86% 44%, 100% 26%, 100% 100%, 0 100%)' }}
+      />
+    </div>
+  );
+}
+
 export function LiveViewer({
   autoCycle = false,
   scrubbable = true,
   hidePicker = false,
   noteHidden = false,
+  noteHiddenOnNarrow = false,
+  backdrop = 'checker',
   testId,
   initialId,
   requestPick,
@@ -58,30 +77,40 @@ export function LiveViewer({
   const [state, setState] = useState<LiveState>({ duration: 1, cutTime: null, time: 0, playing: !reducedMotion });
   const cycling = useRef(autoCycle && !reducedMotion);
   const draggingRef = useRef(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const canvasHostRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef<LivePreview | null>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
   const entry: SiteTemplateEntry | undefined = entries[index];
+  const name = entry ? localize(entry.manifest.name, language) : '';
 
-  // 启动独立引擎 Worker（离开视口自动暂停渲染）
+  // 启动独立引擎 Worker：每次挂载在独立空容器内动态新建 <canvas>（避免 React StrictMode / HMR 对同一节点二次调用 transferControlToOffscreen 抛错）
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const host = canvasHostRef.current;
+    const stage = stageRef.current;
+    if (!host || !stage) return;
+    if (!hasWebgl2()) {
+      setStatus('unsupported');
+      return;
+    }
+    setStatus('starting');
+    const canvas = document.createElement('canvas');
+    canvas.className = 'block size-full';
+    canvas.setAttribute('role', 'img');
+    host.replaceChildren(canvas);
+
     let disposed = false;
     let live: LivePreview | null = null;
     void (async () => {
-      if (!hasWebgl2()) {
-        setStatus('unsupported');
-        return;
-      }
       try {
         live = await LivePreview.create(canvas);
       } catch (error) {
-        console.warn('[live] engine failed to start', error);
-        if (!disposed) setStatus('failed');
+        if (!disposed) {
+          console.warn('[live] engine failed to start', error);
+          setStatus('failed');
+        }
         return;
       }
       if (disposed) {
@@ -103,21 +132,26 @@ export function LiveViewer({
         }
         setState((prev) => (prev.duration === s.duration && prev.playing === s.playing && prev.cutTime === s.cutTime ? prev : s));
       });
-      const stage = stageRef.current;
-      if (stage) {
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
-        live.resize(stage.clientWidth * dpr, stage.clientHeight * dpr);
-      }
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      live.resize(stage.clientWidth * dpr, stage.clientHeight * dpr);
       setStatus('ready');
     })();
     return () => {
       disposed = true;
       liveRef.current = null;
       live?.dispose();
+      canvas.remove();
     };
   }, [entries.length]);
 
-  // 外部（工作流 / 模板卡片）选中模板
+  useEffect(() => {
+    const canvas = canvasHostRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    if (name) canvas.setAttribute('aria-label', name);
+    else canvas.removeAttribute('aria-label');
+  }, [name, status]);
+
+  // 外部（分镜编排 / 试玩台 / 模板卡片）驱动选中模板
   const controlledId = control?.templateId ?? null;
   useEffect(() => {
     if (!controlledId) return;
@@ -139,58 +173,58 @@ export function LiveViewer({
     }
   }, [requestPick, entries, reducedMotion]);
 
-  // 装载当前模板（初次切入时从剪辑点起播，首帧就有完整画面）
-  const overridesRef = useRef<ParamValues | null>(null);
-  overridesRef.current = control?.params ?? null;
+  // 装载当前模板
   useEffect(() => {
     const live = liveRef.current;
     if (status !== 'ready' || !live || !entry) return;
-    void live.show(entry, language, overridesRef.current ?? undefined, true).catch((error: unknown) => console.warn('[live] load failed', error));
-  }, [status, entry, language]);
+    void live.show(entry, language, control?.params ?? undefined, reducedMotion);
+    if (reducedMotion) live.setPlaying(false, false);
+    else if (!live.userPaused && (control?.scrub === undefined || control.scrub === null)) live.setPlaying(true, false);
+    // 切换模板或语言时整套重装；细粒度参数交给下面 setParams
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, entry, language, reducedMotion]);
 
-  // 实时参数更新（工作流第二步调参走 setParams）
-  const paramsKey = control?.params ? JSON.stringify(control.params) : '';
+  // 外部参数实时更新
   useEffect(() => {
     const live = liveRef.current;
-    if (status !== 'ready' || !live || !paramsKey) return;
-    if (live.templateId !== entry?.id) return;
-    live.setParams(JSON.parse(paramsKey) as ParamValues);
-  }, [status, paramsKey, entry?.id]);
+    if (status !== 'ready' || !live || !entry || !control?.params) return;
+    if (live.templateId !== entry.id) return;
+    live.setParams(control.params);
+  }, [status, entry, control?.params]);
 
-  // 外部播放头或减少动效控制
-  const scrub = control?.scrub ?? null;
+  // 外部帧定位（如分镜第三步导出进度）
   useEffect(() => {
     const live = liveRef.current;
     if (status !== 'ready' || !live) return;
-    if (reducedMotion) {
-      live.setPlaying(false);
-      live.seek(state.cutTime ?? state.duration * 0.5);
-      return;
+    const scrub = control?.scrub;
+    if (typeof scrub === 'number') {
+      live.setPlaying(false, false);
+      live.seek(scrub * state.duration);
+    } else if (!reducedMotion && !live.userPaused) {
+      live.setPlaying(true, false);
     }
-    if (scrub === null) {
-      if (!live.userPaused) live.setPlaying(true);
-      return;
-    }
-    live.setPlaying(false);
-    live.seek(scrub * state.duration);
-  }, [status, scrub, state.duration, state.cutTime, reducedMotion]);
+  }, [status, control?.scrub, state.duration, reducedMotion]);
 
-  // 画布尺寸与可见性跟踪
+  // 视口可见性与尺寸监听：滚出视口立即暂停 Worker 渲染循环
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage || status !== 'ready') return;
+    if (!stage) return;
     const ro = new ResizeObserver(() => {
+      const live = liveRef.current;
+      if (!live) return;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      liveRef.current?.resize(stage.clientWidth * dpr, stage.clientHeight * dpr);
+      live.resize(stage.clientWidth * dpr, stage.clientHeight * dpr);
+    });
+    const io = new IntersectionObserver((es) => {
+      liveRef.current?.setVisible(es.some((e) => e.isIntersecting));
     });
     ro.observe(stage);
-    const io = new IntersectionObserver((es) => liveRef.current?.setVisible(es.some((e) => e.isIntersecting)));
     io.observe(stage);
     return () => {
       ro.disconnect();
       io.disconnect();
     };
-  }, [status]);
+  }, []);
 
   const pick = (i: number) => {
     cycling.current = false;
@@ -283,12 +317,12 @@ export function LiveViewer({
     }
   };
 
-  const name = entry ? localize(entry.manifest.name, language) : '';
   const cutShare = state.cutTime !== null && state.duration > 0 ? state.cutTime / state.duration : null;
+  const stageBgClass = backdrop === 'dark' ? 'preview-dark' : backdrop === 'checker' ? 'preview-checker' : '';
 
   return (
-    <div className={`monitor p-2.5 sm:p-3 ${className ?? ''}`} data-testid={testId} data-status={status}>
-      <div className="flex h-9 items-center gap-2.5 px-2 text-[13px]">
+    <div className={`monitor p-2.5 sm:p-3 ${className ?? ''}`} data-testid={testId} data-status={status} data-backdrop={backdrop}>
+      <div className="flex h-8 items-center gap-2.5 px-2 text-[13px]">
         <span className="relative flex size-2" aria-hidden="true">
           {state.playing && !reducedMotion && <span className="absolute inset-0 animate-ping rounded-full bg-primary opacity-60" />}
           <span className="relative size-2 rounded-full bg-primary" />
@@ -300,10 +334,11 @@ export function LiveViewer({
         <span className="t-mono ml-auto hidden text-[10.5px] text-fg-subtle sm:inline">1920 × 1080 · 60 fps</span>
       </div>
 
-      <div ref={stageRef} className="preview-checker relative aspect-video w-full overflow-hidden rounded-[10px]" data-testid="live-stage">
-        <canvas ref={canvasRef} className="absolute inset-0 size-full" aria-label={name || undefined} role="img" />
+      <div ref={stageRef} className={`${stageBgClass} relative aspect-video w-full overflow-hidden rounded-[10px]`} data-testid="live-stage">
+        {backdrop === 'footage' && <FootageBackdrop />}
+        <div ref={canvasHostRef} className="relative z-[1] size-full" />
         {status === 'starting' && (
-          <AllayLoader loading label={t('site.hero.starting')} priority="preview" className="absolute inset-0">
+          <AllayLoader loading label={t('site.hero.starting')} priority="preview" className="absolute inset-0 z-[2]">
             <div className="flex size-full flex-col items-center justify-center gap-3 p-6">
               <Skeleton className="h-[52%] w-[56%]" />
               <span className="text-[12px] text-fg-subtle">{t('site.hero.starting')}</span>
@@ -311,40 +346,45 @@ export function LiveViewer({
           </AllayLoader>
         )}
         {(status === 'unsupported' || status === 'failed') && (
-          <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-fg-muted">{t('site.hero.noWebgl')}</div>
+          <div className="absolute inset-0 z-[2] flex items-center justify-center p-6 text-center text-[13px] text-fg-muted">
+            {status === 'unsupported' ? t('site.hero.noWebgl') : t('site.hero.engineFailed')}
+          </div>
         )}
       </div>
 
-      {/* 播放与时间轴控制条：干净置于画布下方，不遮挡动画帧 */}
       <div className="mt-2.5 space-y-2.5 px-1">
         {!hidePicker && (
-          <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label={t('site.hero.pick')}>
+          <div className="site-scroll-x flex items-center gap-1 overflow-x-auto py-0.5" role="toolbar" aria-label={t('site.hero.pick')}>
             <button
               type="button"
-              className="link-focus flex size-8 shrink-0 items-center justify-center rounded-md bg-control text-foreground transition-colors duration-150 hover:bg-control-hi disabled:opacity-45"
+              className="link-focus flex size-7 shrink-0 items-center justify-center rounded-md bg-control text-foreground transition-colors duration-150 hover:bg-control-hi disabled:opacity-45"
               aria-label={state.playing ? t('site.hero.pause') : t('site.hero.play')}
               data-testid="live-play"
               disabled={status !== 'ready'}
               onClick={togglePlay}
             >
-              {state.playing ? <Pause size={15} weight="fill" /> : <Play size={15} weight="fill" />}
+              {state.playing ? <Pause size={14} weight="fill" /> : <Play size={14} weight="fill" />}
             </button>
-            <span className="mx-0.5 h-5 w-px shrink-0 bg-divider" aria-hidden="true" />
-            {entries.map((e, i) => (
-              <button
-                key={e.id}
-                type="button"
-                aria-pressed={i === index}
-                data-testid="live-chip"
-                data-template={e.id}
-                onClick={() => pick(i)}
-                className={`link-focus h-8 rounded-md px-2.5 text-[12.5px] whitespace-nowrap transition-colors duration-150 ${
-                  i === index ? 'bg-control-hi font-medium text-foreground' : 'text-fg-muted hover:bg-control hover:text-foreground'
-                }`}
-              >
-                {localize(e.manifest.name, language)}
-              </button>
-            ))}
+            <span className="mx-0.5 h-4 w-px shrink-0 bg-divider" aria-hidden="true" />
+            {entries.map((e, i) => {
+              const iconUrl = mcTextureUrl(TEMPLATE_ICON_IDS[e.id] ?? '');
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  aria-pressed={i === index}
+                  data-testid="live-chip"
+                  data-template={e.id}
+                  onClick={() => pick(i)}
+                  className={`link-focus flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] whitespace-nowrap transition-colors duration-150 ${
+                    i === index ? 'bg-control-hi font-medium text-foreground' : 'text-fg-muted hover:bg-control hover:text-foreground'
+                  }`}
+                >
+                  {iconUrl && <img src={iconUrl} alt="" width={13} height={13} className="pixelated size-[13px] shrink-0 rounded-[2px]" draggable={false} />}
+                  {localize(e.manifest.name, language)}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -389,13 +429,13 @@ export function LiveViewer({
                     }`}
                     style={{ flexGrow: s.share, flexBasis: 0, background: STAGE_COLORS[i % 3] }}
                   >
-                    {s.share >= 0.06 && <span className="truncate">{s.label}</span>}
+                    {s.share >= 0.1 && <span className="truncate">{s.label}</span>}
                     {s.share >= 0.2 && <span className="t-tab hidden shrink-0 opacity-80 sm:inline">{s.value.toFixed(2)}s</span>}
                   </div>
                 );
               })}
             </div>
-            {cutShare !== null && <span className="cut-mark top-[-5px]" style={{ left: `${cutShare * 100}%` }} aria-hidden="true" />}
+            {cutShare !== null && <span className="cut-mark top-[-4px]" style={{ left: `${cutShare * 100}%` }} aria-hidden="true" />}
             <div className="pointer-events-none absolute inset-y-[-3px] right-0 left-0">
               <div ref={playheadRef} className="site-playhead absolute inset-y-0 left-0 w-full">
                 <div className="absolute inset-y-0 left-0 w-[2px] -translate-x-1/2 rounded-full bg-primary" />
@@ -404,7 +444,7 @@ export function LiveViewer({
           </div>
         </div>
 
-        <div className={`items-center justify-between gap-4 text-[11px] text-fg-subtle ${noteHidden ? 'hidden' : 'flex'}`}>
+        <div className={`items-center justify-between gap-4 text-[11px] text-fg-subtle ${noteHidden ? 'hidden' : noteHiddenOnNarrow ? 'hidden sm:flex' : 'flex'}`}>
           <span data-testid="assets-note" className="line-clamp-2">
             {mcGameVersion ? t('site.hero.mcAssets', { version: mcGameVersion }) : t('site.hero.demoAssets')}
           </span>

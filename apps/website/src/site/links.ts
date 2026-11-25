@@ -1,4 +1,4 @@
-// 官网上的外部链接：只有 GitHub。下载也指向仓库本身（不写不存在的安装包地址和版本号）。
+// 官网上的外部链接（只有 GitHub）与页面结构常量。
 export const REPO_URL = 'https://github.com/Mystic-Stars/Allay-Motion';
 export const LICENSE_NAME = 'GPL-3.0';
 
@@ -19,7 +19,30 @@ export const DEVELOPERS: readonly Developer[] = [
 export const SECTION = {
   top: 'top',
   workflow: 'workflow',
+  cut: 'cut',
+  try: 'try',
   templates: 'templates',
   features: 'features',
   open: 'open-source',
+  end: 'end',
 } as const;
+
+/** 桌面端支持的四种导出预设（供分镜导出示意与特性卡展示） */
+export const SITE_EXPORT_FORMATS = [
+  { id: 'prores4444', key: 'prores', ext: '.mov' },
+  { id: 'png-sequence', key: 'png', ext: '.zip' },
+  { id: 'webm-vp9', key: 'webm', ext: '.webm' },
+  { id: 'greenscreen-mp4', key: 'greenscreen', ext: '.mp4' },
+] as const;
+
+/** 8 个精选模板对应的代表性原版贴图 ID（public/mc/ 内均已包含） */
+export const TEMPLATE_ICON_IDS: Record<string, string> = {
+  'allay.builtin.block-wipe': 'minecraft:block/diamond_block',
+  'allay.builtin.portal-gate': 'minecraft:block/obsidian',
+  'allay.builtin.chunk-rise': 'minecraft:block/grass_block_side',
+  'allay.builtin.ice-shatter': 'minecraft:block/packed_ice',
+  'allay.builtin.block-punch': 'minecraft:block/tnt_side',
+  'allay.builtin.item-stinger': 'minecraft:item/diamond_sword',
+  'allay.builtin.item-swarm': 'minecraft:block/diamond_ore',
+  'allay.builtin.advancement-toast': 'minecraft:item/diamond',
+};

@@ -1,165 +1,219 @@
 {
   "meta": {
-    "title": "{{name}} — 给 Minecraft 视频创作者的转场动画",
-    "description": "选模板、调参数、实时预览，导出带透明通道的转场短片。免费开源的桌面应用。"
+    "title": "{{name}} · 给 Minecraft 视频创作者的转场工具",
+    "description": "选一个模板，调几个参数，实时预览，导出带透明通道的短片——直接叠在剪辑轨道上。免费、开源、完全离线。"
   },
   "nav": {
-    "label": "主导航",
-    "home": "回到页首",
+    "top": "回到页首",
+    "timeline": "页面时间轴导航",
+    "intro": "开场",
     "workflow": "工作流",
+    "try": "试玩台",
     "templates": "精选模板",
     "features": "特性",
     "openSource": "开源",
-    "github": "GitHub",
-    "toLight": "切换到浅色主题",
-    "toDark": "切换到深色主题",
-    "switchLanguage": "Switch to English"
+    "cutMark": "剪辑点",
+    "timecode": "页面时间码",
+    "language": "Switch to English",
+    "light": "切换到浅色主题",
+    "dark": "切换到深色主题"
   },
   "hero": {
     "eyebrow": "给 Minecraft 视频创作者的转场工具",
-    "titleA": "让每一次转场",
-    "titleB": "都像在游戏里",
-    "titleC": "发生。",
-    "lead": "{{name}}是一个桌面应用：选一个模板，调几个参数，实时预览，导出带透明通道的短片，直接叠在剪辑轨道上。",
+    "line1": "让每一次转场",
+    "line2": "都像在游戏里",
+    "line3": "发生。",
+    "lead": "{{name}}是一个桌面应用：选一个模板，调几个参数，60 帧实时预览，导出带透明通道的成片，直接叠在剪辑轨道上。",
     "primary": "在 GitHub 上获取",
-    "secondary": "看三步工作流",
+    "secondary": "去试玩台亲手调",
     "factsLabel": "核心特点",
     "facts": [
       "免费开源",
       "Windows · macOS",
       "完全离线",
-      "导出带透明通道"
+      "透明通道直出"
     ],
-    "viewerLabel": "实时预览",
-    "pick": "选择预览模板",
+    "worldHint": "拨动右上方的体素{{mascot}}，或按住背景方块靠近另一块试试磁吸拼接",
+    "scrollCue": "向下滚动进入剪辑时间轴",
+    "viewerLabel": "实时渲染",
+    "starting": "正在启动渲染引擎…",
+    "noWebgl": "当前浏览器未开启 WebGL2，无法显示实时渲染画面。",
+    "engineFailed": "实时渲染引擎启动失败，请刷新页面重试。",
+    "pick": "切换预览模板",
     "play": "播放",
     "pause": "暂停",
     "scrub": "拖动预览时间轴",
-    "starting": "正在启动渲染引擎…",
-    "noWebgl": "当前浏览器不支持 WebGL2，无法显示实时预览。",
-    "demoAssets": "网页里使用生成的纯色演示素材；桌面版读取你本机的游戏与资源包。",
-    "mcAssets": "网页里的方块与物品贴图取自 Minecraft {{version}}，版权归 Mojang / Microsoft，仅用于官网展示；桌面版读取你本机的游戏与资源包，安装包不含游戏文件。"
+    "mcAssets": "网页里的方块与物品贴图取自 Minecraft {{version}}，版权归 Mojang / Microsoft，仅用于官网展示；桌面版读取你本机的游戏与资源包，安装包不含游戏文件。",
+    "demoAssets": "网页里使用的是现场生成的演示色块；桌面版直接读取你本机的游戏与资源包。"
+  },
+  "story": {
+    "kicker": "工作流 · 三步",
+    "title": "从打开到导出，三步完成。",
+    "lead": "设计目标：从打开应用到导出第一条转场不超过 30 秒。右侧监视器一直在实时渲染，三步会依次演播，也可以点击标签直接切换。",
+    "panel": "属性检查器",
+    "cutFrame": "剪辑点：第 {{frame}} 帧",
+    "exportTitle": "导出短片",
+    "exportProgressLabel": "导出渲染进度",
+    "exportFrames": "已渲染 {{written}} / {{total}} 帧",
+    "exportStages": {
+      "rendering": "正在逐帧渲染（含子帧运动模糊）…",
+      "muxing": "正在封装透明通道视频…",
+      "done": "导出完成，剪辑点已对齐"
+    },
+    "stepsLabel": "工作流三步",
+    "steps": {
+      "pick": {
+        "kicker": "第一步",
+        "title": "选一个模板。",
+        "body": "转场或叠加层。点击或切换即刻装载——每一帧都是此刻在你的浏览器里现场算出来的。",
+        "more": "桌面版内置完整模板库，并支持导入模板包",
+        "tab": "选模板"
+      },
+      "tune": {
+        "kicker": "第二步",
+        "title": "调几个参数。",
+        "body": "列数、出场顺序、翻转方式、方块材质……每个改动都在下一帧反映到画面上，面板由模板的 manifest 自动生成。",
+        "tab": "调参数"
+      },
+      "export": {
+        "kicker": "第三步",
+        "title": "导出，拖进轨道。",
+        "body": "选择编码格式、分辨率与帧率。导出的每一帧都与预览逐帧一致；把成片叠在上方轨道，让剪辑点对齐两段素材的接缝即可。",
+        "tab": "导出"
+      }
+    }
+  },
+  "cut": {
+    "kicker": "剪辑点",
+    "titleA": "这就是剪辑点。",
+    "titleB": "现在，亲手试一个。",
+    "body": "刚才铺满整个屏幕的，正是「{{template}}」模板本身：由同一个渲染引擎在浏览器里实时画出，盖在两段内容的接缝上——和成片在剪辑软件里的用法完全一致。",
+    "hud": "剪辑点 · {{template}} · 实时渲染"
+  },
+  "sim": {
+    "kicker": "试玩台 · 1:1 真实桌面编辑器",
+    "title": "和应用里一模一样，直接在网页里上手。",
+    "lead": "下方窗口里运行的不是截图也不是简化版，而是桌面应用本身的编辑器界面与实时渲染引擎。上方可一键切换精选代表作，左侧选模板、底部拖时间轴、右侧拧参数或点「导出」试试。",
+    "quickPick": "快捷切换精选模板",
+    "frameLabel": "桌面应用编辑器试玩窗口",
+    "starting": "正在启动桌面编辑器与渲染引擎…",
+    "start": "启动编辑器试玩台",
+    "autoStart": "滚入视口后会自动装载桌面编辑器界面",
+    "exportNote": "网页试玩台会完整跑完逐帧渲染流程；写出带透明通道的 ProRes 4444 / WebM / PNG 文件由桌面版的独立 FFmpeg 进程完成。",
+    "compactTitle": "窄屏预览模式",
+    "compact": "完整多栏编辑器适合在桌面宽屏浏览（≥ 900px）；当前屏幕下可直接切换模板并拖动时间轴预览：",
+    "desktopOnly": {
+      "files": "读写本地文件",
+      "project": "打开或保存工程文件",
+      "packs": "挂载本机材质资源包",
+      "vanilla": "读取或下载本机原版游戏素材",
+      "templates": "导入或管理第三方模板包",
+      "presets": "导入导出自定义预设文件",
+      "folder": "在系统资源管理器中打开目录"
+    },
+    "desktopOnlyHint": "需要访问本机文件系统，请在桌面版中使用。",
+    "getDesktop": "获取桌面版",
+    "dismiss": "关闭提示",
+    "exportDoneTitle": "已完成 {{frames}} 帧逐帧渲染演练",
+    "exportDone": "试玩台已按「{{format}}」跑完渲染与{{mascot}}送达流程。安装桌面版即可调用内置 FFmpeg 直接写出透明通道成片文件。",
+    "keepTrying": "继续试玩"
+  },
+  "host": {
+    "demoPackName": "内置程序化色块（网页演示）",
+    "demoPackDescription": "零游戏文件的纯色保底材质层",
+    "mcPackName": "Minecraft 原版贴图（网页展示）",
+    "mcPackDescription": "官网内置的展示贴图子集；桌面版直接读取你本机的游戏与资源包",
+    "exportTarget": "网页演示演练（桌面版将通过 FFmpeg 写出真实透明视频）"
   },
   "categories": {
     "transition": "转场",
     "overlay": "叠加层"
   },
-  "workflow": {
-    "kicker": "工作流 · 三步",
-    "title": "从打开到导出，三步完成。",
-    "lead": "选好模板、微调参数、直接导出成片。点击左侧任意步骤或控件，右侧实时渲染立刻响应。",
-    "stepsLabel": "工作流步骤",
-    "previewTitle": "实时预览",
-    "steps": {
-      "pick": {
-        "tab": "选模板",
-        "kicker": "第一步",
-        "title": "挑一个转场或叠加层。",
-        "body": "桌面版内置丰富模板，也支持用 TypeScript 写自己的模板或派生预设。点下面任意一个精选示例切换右侧画面："
-      },
-      "tune": {
-        "tab": "调参数",
-        "kicker": "第二步",
-        "title": "拖动滑块，实时出图。",
-        "body": "列数、出场顺序、翻转方式都会通过引擎的 setParams 立刻重画到右侧预览里。这里用方块擦除现场试调：",
-        "reset": "恢复默认"
-      },
-      "export": {
-        "tab": "导出",
-        "kicker": "第三步",
-        "title": "导出带透明通道的短片。",
-        "body": "支持 ProRes 4444、PNG 序列、WebM VP9 与绿幕 MP4；导出的每一帧都和预览逐帧一致，拖进剪辑软件上层轨道即可。",
-        "progressLabel": "导出进度预览",
-        "rendering": "正在逐帧渲染…",
-        "muxing": "正在交给 FFmpeg 封装…",
-        "done": "导出完成，拖进剪辑软件即可使用",
-        "replay": "重播进度",
-        "download": "下载桌面版"
-      }
-    }
-  },
   "templates": {
     "kicker": "精选展示",
-    "title": "几个代表性效果。",
-    "lead": "下方每个格子的画面，都由你浏览器里的渲染引擎现场画出来——不是预录视频。下载桌面版即可使用完整模板库与自定义模板。",
-    "featured": "精选",
+    "title": "从这几个代表作开始。",
+    "lead": "每个格子的画面都由浏览器里的渲染引擎现场生成，悬停即可预览循环动画，点击右上角按钮直接载入上方桌面编辑器调参。",
+    "featured": "主打演示",
+    "rendering": "正在渲染封面…",
+    "failed": "封面暂不可用",
     "meta": "{{category}} · {{duration}} 秒",
     "metaNoDuration": "{{category}}",
-    "rendering": "正在渲染封面…",
-    "failed": "这张封面未能渲染。",
-    "preview": "在顶部预览",
+    "openInSim": "在试玩台编辑器中打开",
     "params": "可调参数",
-    "moreTitle": "持续扩展的模板生态。",
-    "moreBody": "模板由一份 manifest 与脚本组成。按照编写指南用 TypeScript 创作，即可和内置模板一样实时预览与导出。",
-    "moreLink": "模板编写指南"
+    "moreTitle": "完整模板库与自定义脚本",
+    "moreBody": "桌面版内置丰富的转场与游戏界面叠加层模板，也支持用 TypeScript 编写自己的确定性模板并打包分享。",
+    "moreLink": "阅读模板编写指南"
   },
   "features": {
     "kicker": "特性",
-    "title": "为剪辑而做的每一个细节。",
+    "title": "为剪辑工作流打磨的每一处细节。",
     "alpha": {
       "title": "导出带透明通道",
-      "body": "直接盖在剪辑软件的上层轨道，不用抠像。下方画面由浏览器引擎现场渲染。",
+      "body": "直接盖在剪辑软件的上层轨道，不用色度抠像。拖动分界线对比透明棋盘格与实景叠加效果。",
       "transparent": "透明背景",
       "over": "叠在素材上",
-      "drag": "拖动分界线对比透明与叠加效果",
-      "footage": "背景素材示意"
+      "drag": "拖动分界线对比",
+      "footage": "实景背景示意"
+    },
+    "frames": {
+      "title": "预览就是成片",
+      "body": "画面是时间的纯函数。预览与导出走同一份渲染代码，逐帧一致，导出时还支持子帧采样运动模糊。",
+      "preview": "实时预览",
+      "export": "最终导出",
+      "same": "逐帧一致"
     },
     "formats": {
-      "title": "多种导出格式",
-      "body": "透明通道给主流剪辑软件，绿幕给不支持透明轨道的编辑器。",
-      "items": [
-        {
-          "name": "ProRes 4444（透明通道）",
-          "ext": ".mov",
-          "apps": "Premiere · DaVinci Resolve · Final Cut Pro"
-        },
-        {
-          "name": "PNG 透明序列",
-          "ext": ".zip",
-          "apps": "任意剪辑与合成软件"
-        },
-        {
-          "name": "WebM VP9（透明通道）",
-          "ext": ".webm",
-          "apps": "OBS · Premiere · DaVinci Resolve"
-        },
-        {
-          "name": "绿幕 MP4（H.264）",
-          "ext": ".mp4",
-          "apps": "剪映 · CapCut 及所有编辑器"
-        }
-      ]
+      "title": "主流剪辑格式齐全",
+      "body": "透明通道直出给专业非编软件，同时提供绿幕 MP4 兼容移动端与轻量剪辑工具。",
+      "names": {
+        "prores": "ProRes 4444（透明通道）",
+        "png": "PNG 透明图像序列",
+        "webm": "WebM VP9（透明通道）",
+        "greenscreen": "绿幕 MP4（H.264）"
+      },
+      "apps": {
+        "prores": "Premiere Pro · DaVinci Resolve · Final Cut Pro · After Effects",
+        "png": "任意支持序列帧的剪辑与合成软件",
+        "webm": "OBS Studio · Premiere Pro · DaVinci Resolve · 网页叠层",
+        "greenscreen": "剪映 · CapCut · 必剪及所有不认透明轨道的编辑器"
+      }
     },
     "stack": {
-      "title": "用你自己的素材",
-      "body": "三层资源栈自下而上覆盖：内置纯色层、本机游戏原版素材、你的资源包。点击下方任意一层查看效果。",
+      "title": "用你自己的资源包",
+      "body": "三层资源栈自下而上覆盖：内置纯色层、本机游戏原版素材、你的材质资源包。点击任意一层锁定查看：",
       "layers": [
-        "资源包",
-        "原版素材",
-        "内置层"
+        "你的资源包",
+        "本机原版素材",
+        "内置纯色层"
       ]
     },
     "offline": {
       "title": "完全离线与沙箱隔离",
-      "body": "没有账号、遥测或在线跟踪。模板脚本在独立 Worker 沙箱里运行，拿不到下列网页与系统全局：",
-      "sandbox": "在模板 Worker 中移除的全局："
+      "body": "没有账号、遥测或后台统计。模板脚本在隔离的 Worker 沙箱里运行，拿不到任何网页与网络接口：",
+      "sandbox": "在模板 Worker 中移除的全局对象："
+    },
+    "extend": {
+      "title": "声明参数，自动生成面板",
+      "body": "预设、派生模板、模板包导入导出，以及 TypeScript 脚本模板。manifest.json 里写一条参数声明，界面自动渲染出对应控件："
     }
   },
   "open": {
-    "kicker": "开源 · 署名",
+    "kicker": "开源 · 片尾",
     "title": "开源、免费，欢迎一起做。",
-    "lead": "源代码以 GPL-3.0 许可证在 GitHub 上公开。欢迎提 issue、贡献模板或参与开发。",
+    "lead": "源代码以 GPL-3.0 许可证在 GitHub 公开。欢迎提 issue、分享新模板或参与开发。",
     "repo": "查看源代码",
     "license": "许可证",
-    "credits": "开发团队",
+    "credits": "片尾字幕",
     "developersLabel": "开发者",
     "claudeNote": "Claude 的标志是 Anthropic 的商标，这里只用于署名。"
   },
   "footer": {
     "disclaimerLabel": "非官方声明",
     "license": "代码以 GPL-3.0 许可证开源。",
-    "fonts": "界面字体 IBM Plex Sans、IBM Plex Mono、Noto Sans SC 均以 SIL OFL 1.1 授权。",
     "source": "源代码",
-    "noTracking": "本站不使用 Cookie、统计或任何第三方外部请求。"
+    "fonts": "界面字体 IBM Plex Sans、IBM Plex Mono、Noto Sans SC 均以 SIL OFL 1.1 授权。",
+    "noTracking": "本站不使用 Cookie、统计或任何第三方外部请求。",
+    "tcOut": "出点",
+    "end": "完"
   }
 }
