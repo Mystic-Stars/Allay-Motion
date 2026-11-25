@@ -1,24 +1,28 @@
-// 特性一节（精简为 4 张核心卡片）：
-// - F/01 透明通道：复用封面服务的 block-wipe 半透明代表帧做分界对比（不额外开 WebGL 上下文）；
-// - F/02 导出格式：桌面端四种导出预设；
-// - F/03 资源栈：支持真正点击切换与锁定层，离开视口暂停自动轮换；
-// - F/04 离线与沙箱隔离：列出从模板 Worker 移除的全局对象。
+// 特性一节（6 卡不对称 Bento 网格）：
+// 1. 导出带透明通道：分界对比滑块（叠加浏览器引擎实时渲染的 block-wipe 半透明代表帧）；
+// 2. 预览就是成片：双行 5 帧胶片同步步进（frame(t) = update(t)，离开视口自动暂停）；
+// 3. 多种导出格式：桌面端四种导出预设；
+// 4. 用你自己的素材：可点击锁定的三层资源栈 + CSS 3D 等轴测方块；
+// 5. 完全离线与沙箱隔离：Worker 沙箱移除的全局对象划线演示；
+// 6. 模板可以扩展：真实 manifest 参数 JSON 与交互式 Slider 对照。
+import { localize } from '@allay/template-sdk';
 import { Button } from '@allay/ui/components/button';
 import { Badge, Skeleton } from '@allay/ui/components/misc';
-import { Export as ExportIcon, FilmStrip, Stack, WifiSlash } from '@phosphor-icons/react';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Slider } from '@allay/ui/components/slider';
+import { Export as ExportIcon, FilmStrip, PlugsConnected, PuzzlePiece, Stack, WifiSlash } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { REMOVED_GLOBALS } from '../../../../../packages/engine/src/harden';
 import { mcTextureUrl } from '../../host/mc-pack';
-import { useShowcaseCovers, type ShowcaseCover } from '../engine/covers';
-import { SECTION } from '../links';
+import { showcaseEntries } from '../../host/templates';
+import { COVER_H, COVER_W, useShowcaseCovers, type ShowcaseCover } from '../engine/covers';
+import { SECTION, SITE_EXPORT_FORMATS } from '../links';
 import { useReveal } from '../motion/interactions';
 import { usePrefs } from '../prefs';
 
 const ALPHA_TEMPLATE = 'allay.builtin.block-wipe';
 
 function Card({
-  index,
   icon,
   title,
   body,
@@ -27,7 +31,6 @@ function Card({
   testId,
   style,
 }: {
-  index: string;
   icon: ReactNode;
   title: string;
   body: string;
@@ -38,31 +41,34 @@ function Card({
 }) {
   return (
     <div className={className} style={style}>
-      <article className="card flex h-full flex-col p-6 sm:p-7" data-testid={testId}>
-        <div className="flex items-center justify-between">
+      <article className="card card-spotlight flex h-full flex-col p-6 sm:p-7" data-testid={testId}>
+        <div className="relative z-[1] flex flex-1 flex-col">
           <span className="flex size-9 items-center justify-center rounded-lg bg-control text-fg-muted">{icon}</span>
-          <span className="t-mono text-[10.5px] text-fg-subtle">{index}</span>
+          <h3 className="t-h3 mt-5">{title}</h3>
+          <p className="t-body mt-2 max-w-[36em]">{body}</p>
+          {children}
         </div>
-        <h3 className="t-h3 mt-5">{title}</h3>
-        <p className="t-body mt-2 max-w-[36em]">{body}</p>
-        {children}
       </article>
     </div>
   );
 }
 
-/** 示意背景素材 */
 function Footage() {
   return (
-    <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, #1d2c55 0%, #52507d 38%, #d9866a 72%, #f2c57c 100%)' }}>
+    <div className="preview-footage absolute inset-0">
       <div className="absolute top-[52%] left-[64%] aspect-square w-[11%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#ffe3a8] opacity-90 blur-[2px]" />
-      <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[#3b3157]" style={{ clipPath: 'polygon(0 40%, 12% 22%, 24% 38%, 38% 12%, 52% 34%, 66% 18%, 80% 36%, 92% 20%, 100% 30%, 100% 100%, 0 100%)' }} />
-      <div className="absolute inset-x-0 bottom-0 h-[26%] bg-[#231d38]" style={{ clipPath: 'polygon(0 30%, 18% 50%, 34% 24%, 50% 46%, 70% 20%, 86% 44%, 100% 26%, 100% 100%, 0 100%)' }} />
+      <div
+        className="absolute inset-x-0 bottom-0 h-[42%] bg-[#3b3157]"
+        style={{ clipPath: 'polygon(0 40%, 12% 22%, 24% 38%, 38% 12%, 52% 34%, 66% 18%, 80% 36%, 92% 20%, 100% 30%, 100% 100%, 0 100%)' }}
+      />
+      <div
+        className="absolute inset-x-0 bottom-0 h-[26%] bg-[#231d38]"
+        style={{ clipPath: 'polygon(0 30%, 18% 50%, 34% 24%, 50% 46%, 70% 20%, 86% 44%, 100% 26%, 100% 100%, 0 100%)' }}
+      />
     </div>
   );
 }
 
-/** 在分界线上叠加 block-wipe 渲染出的半透明代表帧（无额外 WebGL 上下文或空闲 rAF） */
 function CoverOverlay({ cover, label }: { cover: ShowcaseCover | null | undefined; label: string }) {
   if (cover === undefined) return <Skeleton className="absolute inset-0 size-full rounded-none opacity-40" />;
   if (cover === null) return null;
@@ -111,31 +117,114 @@ function AlphaDemo() {
   );
 }
 
-interface FormatItem {
-  name: string;
-  ext: string;
-  apps: string;
+function FramesDemo() {
+  const { t } = useTranslation();
+  const { language, reducedMotion } = usePrefs();
+  const covers = useShowcaseCovers(language);
+  const cover = covers[ALPHA_TEMPLATE];
+  const N = 5;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const strips = useRef<(HTMLCanvasElement | null)[]>([]);
+  const [hot, setHot] = useState(2);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((es) => setVisible(es.some((e) => e.isIntersecting)));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const sheet = cover?.sheet;
+    if (!cover || !sheet) return;
+    strips.current.forEach((c, k) => {
+      const g = c?.getContext('2d');
+      if (!g) return;
+      const i = Math.min(cover.frames - 1, Math.round(((k % N) + 0.5) * (cover.frames / N)));
+      g.clearRect(0, 0, COVER_W, COVER_H);
+      g.drawImage(sheet, (i % cover.cols) * COVER_W, Math.floor(i / cover.cols) * COVER_H, COVER_W, COVER_H, 0, 0, COVER_W, COVER_H);
+    });
+  }, [cover]);
+
+  useEffect(() => {
+    if (reducedMotion || !visible) return;
+    const id = window.setInterval(() => setHot((h) => (h + 1) % N), 620);
+    return () => window.clearInterval(id);
+  }, [reducedMotion, visible]);
+
+  const frameNo = cover ? Math.round((hot + 0.5) * (cover.frames / N)) : hot;
+
+  return (
+    <div ref={rootRef} className="mt-auto space-y-2 pt-6" aria-hidden="true">
+      <div className="mb-5 flex items-end justify-between gap-4">
+        <span className="t-tab text-[clamp(52px,5.6vw,86px)] leading-none font-medium tracking-[-0.06em] text-foreground">
+          <span className="text-fg-subtle">#</span>
+          {String(frameNo).padStart(3, '0')}
+        </span>
+        <span className="t-mono pb-2 text-right text-[10px] text-primary-text">
+          {t('site.features.frames.preview')} = {t('site.features.frames.export')}
+        </span>
+      </div>
+      {(['preview', 'export'] as const).map((row, r) => (
+        <div key={row} className="flex items-center gap-3">
+          <span className="t-mono w-16 shrink-0 text-[10px] text-fg-subtle">{t(`site.features.frames.${row}`)}</span>
+          <div className="relative grid flex-1 grid-cols-5 gap-1.5">
+            {Array.from({ length: N }, (_, k) => (
+              <div
+                key={k}
+                className={`preview-checker relative aspect-video overflow-hidden rounded-[5px] transition-[box-shadow,opacity] duration-300 ${
+                  k === hot ? 'opacity-100 ring-2 ring-primary' : 'opacity-55'
+                }`}
+              >
+                <canvas
+                  ref={(el) => {
+                    strips.current[r * N + k] = el;
+                  }}
+                  width={COVER_W}
+                  height={COVER_H}
+                  className="absolute inset-0 size-full object-cover"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="flex items-center gap-3 pt-2">
+        <span className="w-16 shrink-0" />
+        <div className="relative h-5 flex-1">
+          <div className="absolute top-1/2 h-px w-full bg-[var(--site-line-hi)]" />
+          <div
+            className="absolute top-0 bottom-0 w-[2px] rounded bg-primary transition-[left] duration-500 ease-(--ease-expo)"
+            style={{ left: `${((hot + 0.5) / N) * 100}%` }}
+          />
+        </div>
+      </div>
+      <p className="t-mono pl-[76px] text-[10px] text-primary-text">
+        {t('site.features.frames.same')} · frame(t) = update(t)
+      </p>
+    </div>
+  );
 }
 
 function FormatsDemo() {
   const { t } = useTranslation();
-  const items = t('site.features.formats.items', { returnObjects: true }) as FormatItem[];
   return (
     <ul className="mt-5 flex-1 space-y-1.5" data-testid="format-list">
-      {items.map((item) => (
-        <li key={item.ext} className="rounded-md px-3 py-2.5 transition-colors duration-(--dur-1) hover:bg-control">
+      {SITE_EXPORT_FORMATS.map((item) => (
+        <li key={item.id} className="rounded-md px-3 py-2.5 transition-colors duration-(--dur-1) hover:bg-control">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-[14px] font-medium">{item.name}</span>
+            <span className="text-[14px] font-medium">{t(`site.features.formats.names.${item.key}`)}</span>
             <Badge className="t-tab">{item.ext}</Badge>
           </div>
-          <p className="mt-1 text-[12.5px] text-fg-subtle">{item.apps}</p>
+          <p className="mt-1 text-[12.5px] text-fg-subtle">{t(`site.features.formats.apps.${item.key}`)}</p>
         </li>
       ))}
     </ul>
   );
 }
 
-/** 三层资源栈：支持点击选中并锁定，仅在可见且未被点击锁定时温和轮播 */
 function StackDemo() {
   const { t } = useTranslation();
   const { reducedMotion } = usePrefs();
@@ -160,7 +249,7 @@ function StackDemo() {
   }, [reducedMotion, selected, visible]);
 
   const active = selected ?? autoLayer;
-  const diamond = mcTextureUrl('minecraft:diamond_block');
+  const diamond = mcTextureUrl('minecraft:block/diamond_block');
   const swatch = (i: number): CSSProperties =>
     i === 0 || !diamond
       ? { background: i === 2 ? '#9B85E8' : i === 1 ? '#52D6DC' : 'repeating-linear-gradient(45deg, #3f8fa8 0 4px, #4aa6c1 4px 8px)' }
@@ -224,6 +313,67 @@ function OfflineDemo() {
   );
 }
 
+function ExtendDemo() {
+  const { language } = usePrefs();
+  const param = useMemo(() => {
+    const wipe = showcaseEntries().find((e) => e.id === ALPHA_TEMPLATE) ?? showcaseEntries()[0];
+    return (wipe?.manifest.params ?? []).find(
+      (p): p is Extract<typeof p, { min: number; max: number }> => p.key === 'cols' && 'min' in p && typeof p.min === 'number' && typeof p.max === 'number',
+    );
+  }, []);
+  const [v, setV] = useState(14);
+  if (!param) return null;
+  const json = {
+    key: param.key,
+    type: param.type,
+    label: param.label,
+    default: param.default,
+    min: param.min,
+    max: param.max,
+    ...(param.ui ? { ui: param.ui } : {}),
+  };
+
+  return (
+    <div className="mt-6 grid flex-1 items-center gap-4 md:grid-cols-[1.35fr_auto_1fr] lg:max-w-[1040px]">
+      <pre className="t-tab overflow-x-auto rounded-md bg-well p-4 text-[11.5px] leading-[1.6]" aria-label="manifest.json">
+        {JSON.stringify(json, null, 2)
+          .split('\n')
+          .map((line, idx) => {
+            const m = /^(\s*)("[^"]+")(:\s*)(.*)$/.exec(line);
+            return (
+              <span key={idx} className="block">
+                {m ? (
+                  <>
+                    {m[1]}
+                    <span className="text-primary-text">{m[2]}</span>
+                    {m[3]}
+                    <span className={/^"/.test(m[4]!) ? 'text-[var(--cue)]' : /^[\d.]/.test(m[4]!) ? 'text-[var(--mark)]' : 'text-fg-muted'}>{m[4]}</span>
+                  </>
+                ) : (
+                  <span className="text-fg-subtle">{line}</span>
+                )}
+              </span>
+            );
+          })}
+      </pre>
+      <span className="t-mono hidden text-center text-[18px] text-fg-faint md:block" aria-hidden="true">
+        →
+      </span>
+      <div className="float p-4">
+        <div className="flex items-baseline justify-between text-[12.5px]">
+          <span className="text-fg-muted">{localize(param.label, language)}</span>
+          <span className="t-tab font-semibold text-foreground">{v}</span>
+        </div>
+        <Slider className="mt-1.5" value={v} min={param.min} max={param.max} step={1} thumbLabel={localize(param.label, language)} onValueChange={setV} />
+        <div className="t-tab mt-2 flex justify-between text-[10px] text-fg-subtle">
+          <span>{param.min}</span>
+          <span>{param.max}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FeaturesSection() {
   const { t } = useTranslation();
   const head = useReveal<HTMLDivElement>();
@@ -231,27 +381,38 @@ export function FeaturesSection() {
   const i = (n: number) => ({ '--i': n }) as CSSProperties;
 
   return (
-    <section id={SECTION.features} aria-labelledby="features-title" className="relative border-t border-[var(--site-line)] py-20 lg:py-28">
+    <section id={SECTION.features} data-tl-clip="features" data-tl-color="var(--stage-enter)" aria-labelledby="features-title" className="relative py-28">
+      <div className="ruler wrap pointer-events-none absolute inset-x-0 top-0 opacity-60" aria-hidden="true" />
+      <span className="scene-watermark absolute top-8 right-[var(--gutter)] hidden lg:block" aria-hidden="true">
+        SCENE 04
+      </span>
       <div className="wrap relative">
-        <div ref={head} className="reveal max-w-[44em]">
+        <div ref={head} className="reveal relative max-w-[900px]">
+          <span data-allay-anchor="features" data-allay-facing="left" className="absolute -top-6 right-0 size-1 lg:-right-[18%]" aria-hidden="true" />
           <p className="t-mono text-fg-subtle">{t('site.features.kicker')}</p>
-          <h2 id="features-title" className="t-h2 mt-3">
+          <h2 id="features-title" className="t-h2 mt-4">
             {t('site.features.title')}
           </h2>
         </div>
 
-        <div ref={grid} className="reveal mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-12 lg:gap-5">
-          <Card index="F/01" icon={<FilmStrip size={20} weight="fill" />} title={t('site.features.alpha.title')} body={t('site.features.alpha.body')} className="md:col-span-2 lg:col-span-7" testId="feature-alpha" style={i(0)}>
+        <div ref={grid} className="reveal mt-14 grid gap-4 md:grid-cols-2 lg:grid-cols-12 lg:gap-5">
+          <Card icon={<FilmStrip size={20} weight="fill" />} title={t('site.features.alpha.title')} body={t('site.features.alpha.body')} className="md:col-span-2 lg:col-span-7" testId="feature-alpha" style={i(0)}>
             <AlphaDemo />
           </Card>
-          <Card index="F/02" icon={<ExportIcon size={20} weight="fill" />} title={t('site.features.formats.title')} body={t('site.features.formats.body')} className="lg:col-span-5" style={i(1)}>
+          <Card icon={<PlugsConnected size={20} weight="fill" />} title={t('site.features.frames.title')} body={t('site.features.frames.body')} className="lg:col-span-5" style={i(1)}>
+            <FramesDemo />
+          </Card>
+          <Card icon={<ExportIcon size={20} weight="fill" />} title={t('site.features.formats.title')} body={t('site.features.formats.body')} className="lg:col-span-5" style={i(2)}>
             <FormatsDemo />
           </Card>
-          <Card index="F/03" icon={<Stack size={20} weight="fill" />} title={t('site.features.stack.title')} body={t('site.features.stack.body')} className="lg:col-span-7" style={i(2)}>
+          <Card icon={<Stack size={20} weight="fill" />} title={t('site.features.stack.title')} body={t('site.features.stack.body')} className="lg:col-span-4" style={i(3)}>
             <StackDemo />
           </Card>
-          <Card index="F/04" icon={<WifiSlash size={20} weight="fill" />} title={t('site.features.offline.title')} body={t('site.features.offline.body')} className="lg:col-span-5" style={i(3)}>
+          <Card icon={<WifiSlash size={20} weight="fill" />} title={t('site.features.offline.title')} body={t('site.features.offline.body')} className="lg:col-span-3" style={i(4)}>
             <OfflineDemo />
+          </Card>
+          <Card icon={<PuzzlePiece size={20} weight="fill" />} title={t('site.features.extend.title')} body={t('site.features.extend.body')} className="md:col-span-2 lg:col-span-12" style={i(5)}>
+            <ExtendDemo />
           </Card>
         </div>
       </div>

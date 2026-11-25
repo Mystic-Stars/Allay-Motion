@@ -225,6 +225,7 @@ export class LivePreview {
   private listeners = new Set<(s: LiveState) => void>();
 
   userPaused = false;
+  loop = true;
   onLoop: (() => void) | null = null;
 
   private constructor() {}
@@ -258,8 +259,16 @@ export class LivePreview {
     this.raf = requestAnimationFrame(this.tick);
   }
 
-  show(entry: SiteTemplateEntry, locale: SiteLanguage, overrides?: ParamValues, startAtCut = false): Promise<void> {
+  show(
+    entry: SiteTemplateEntry,
+    locale: SiteLanguage,
+    overrides?: ParamValues,
+    opts?: boolean | { startAtCut?: boolean; width?: number; height?: number },
+  ): Promise<void> {
     this.pendingParams = null;
+    const startAtCut = typeof opts === 'boolean' ? opts : Boolean(opts?.startAtCut);
+    const width = typeof opts === 'object' && opts?.width ? opts.width : 1920;
+    const height = typeof opts === 'object' && opts?.height ? opts.height : 1080;
     return this.queue(async () => {
       const host = this.host;
       const bundle = showcaseBundle(entry.id);
@@ -269,7 +278,7 @@ export class LivePreview {
         manifest: bundle.entry.manifest,
         code: bundle.code,
         params,
-        output: { width: 1920, height: 1080, fps: 60 },
+        output: { width, height, fps: 60 },
         resourceStamp: SITE_RESOURCE_STAMP,
         locale,
       });
@@ -283,6 +292,14 @@ export class LivePreview {
       this.emit();
       this.scheduleTick();
     });
+  }
+
+  get currentTime(): number {
+    return this.time;
+  }
+
+  get isPlaying(): boolean {
+    return this.playing;
   }
 
   get templateId(): string | null {
@@ -358,13 +375,23 @@ export class LivePreview {
     const dt = Math.min(0.1, Math.max(0, (now - (this.last || now)) / 1000));
     this.last = now;
     if (this.playing) {
-      const span = this.duration + 0.35;
-      let t = this.time + dt;
-      if (t >= span) {
-        t %= span;
-        this.onLoop?.();
+      if (!this.loop) {
+        const next = this.time + dt;
+        if (next >= this.duration) {
+          this.time = this.duration;
+          this.playing = false;
+        } else {
+          this.time = next;
+        }
+      } else {
+        const span = this.duration + 0.35;
+        let t = this.time + dt;
+        if (t >= span) {
+          t %= span;
+          this.onLoop?.();
+        }
+        this.time = t;
       }
-      this.time = t;
       this.dirty = true;
       this.emit();
     }

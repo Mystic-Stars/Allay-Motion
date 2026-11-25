@@ -1,0 +1,27 @@
+/*
+ * 仿真器页面自己的几条样式（不改桌面版的代码）：
+ * 桌面版的顶栏用 env(titlebar-area-*) 给系统窗口按钮让位，浏览器里没有这个值，这里补上同样的宽度，
+ * 再在那个位置画三个按钮的样子（Windows 的 titleBarOverlay 也是盖在页面右上角的）。
+ */
+[data-testid='topbar'] {
+  padding-right: 144px !important;
+}
+
+.sim-caption {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 60;
+  display: flex;
+  height: 44px;
+  pointer-events: none;
+  color: var(--foreground);
+  background: var(--background);
+}
+.sim-caption > span {
+  display: flex;
+  width: 46px;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+}

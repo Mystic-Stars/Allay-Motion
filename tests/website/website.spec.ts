@@ -1,4 +1,4 @@
-// 官网精简冒烟测试（T-WEB-1 至 T-WEB-6）：在 Electron 自带的 Chromium 里打开 vite preview 起的构建产物，窗口不显示。
+// 官网验收冒烟测试（T-WEB-1 至 T-WEB-7）：覆盖剪辑时间轴导航、3D 体素世界、首屏舞台、剪辑点转场、1:1 真实桌面编辑器试玩台、8 个精选模板、合规声明与窄屏/减动效表现。
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,7 @@ import { brandMessages } from '../../packages/ui/src/brand/messages';
 const ROOT = resolve(import.meta.dirname, '../..');
 const ELECTRON = createRequire(join(ROOT, 'apps/desktop/package.json'))('electron') as string;
 const SITE = 'http://localhost:4180/';
-const SHOWCASE_COUNT = 5;
+const SHOWCASE_COUNT = 8;
 
 const DISCLAIMER_EN = 'NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.';
 const DISCLAIMER_ZH = '本软件不是 Minecraft 官方产品，未经 Mojang 或 Microsoft 批准，也与它们无关。';
@@ -62,8 +62,11 @@ test.afterAll(async () => {
   await closeSession(s);
 });
 
-test('T-WEB-1 页面加载：首屏实时预览与 5 个精选模板封面就绪，无报错、无外部请求', async () => {
+test('T-WEB-1 页面加载：时间轴导航、3D 世界、首屏实时舞台与 8 个精选模板封面就绪，无报错、无外部请求', async () => {
   const { page } = s;
+  await expect(page.getByTestId('nav-timecode')).toHaveText('00:00:00');
+  await expect(page.getByTestId('world')).toBeAttached();
+
   const hero = page.getByTestId('hero-viewer');
   await expect(hero).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
   await expect(hero.getByTestId('live-chip')).toHaveCount(SHOWCASE_COUNT);
@@ -83,75 +86,71 @@ test('T-WEB-1 页面加载：首屏实时预览与 5 个精选模板封面就绪
   expect(await externalRequests(s.app)).toEqual([]);
 });
 
-test('T-WEB-2 交互链路：首屏切模板/拖时间轴、工作流调参、卡片载入顶部预览、特性卡交互全部响应正确', async () => {
+test('T-WEB-2 交互链路：首屏与分镜切换、1:1 真实桌面编辑器试玩台就绪与选模板联动、特性卡交互正常', async () => {
   const { page } = s;
   const hero = page.getByTestId('hero-viewer');
   await expect(hero).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
 
   // 1. 首屏切换模板芯片
-  const fallChip = hero.locator('[data-testid="live-chip"][data-template="allay.builtin.block-fall"]');
-  await fallChip.click();
-  await expect(fallChip).toHaveAttribute('aria-pressed', 'true');
-  await expect(hero.getByTestId('live-template-name')).toHaveText(/方块坠落|Block fall/);
+  const chunkChip = hero.locator('[data-testid="live-chip"][data-template="allay.builtin.chunk-rise"]');
+  await chunkChip.dispatchEvent('click');
+  await expect(chunkChip).toHaveAttribute('aria-pressed', 'true');
 
-  // 2. 首屏时间轴拖动与键盘控制
-  const timeline = hero.getByTestId('live-timeline');
-  const box = (await timeline.boundingBox())!;
-  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.72, box.y + box.height / 2, { steps: 4 });
-  await page.mouse.up();
-  await expect(hero.getByTestId('live-play')).toHaveAttribute('aria-label', /播放|Play/);
-  const vAfterMouse = Number(await timeline.getAttribute('aria-valuenow'));
-  expect(vAfterMouse).toBeGreaterThanOrEqual(55);
-  await timeline.focus();
-  await page.keyboard.press('Home');
-  await expect(timeline).toHaveAttribute('aria-valuenow', '0');
+  // 2. 分镜三步标签可手动切换
+  const storyTabs = page.getByTestId('story-tab');
+  await storyTabs.nth(1).scrollIntoViewIfNeeded();
+  await storyTabs.nth(1).click();
+  await expect(page.getByTestId('tune-panel')).toBeVisible();
+  await storyTabs.nth(2).click();
+  await chunkChip.click();
+  await expect(chunkChip).toHaveAttribute('aria-pressed', 'true');
 
-  // 3. 工作流三步交互：选模板 → 调参数（滑块、图案、翻转）→ 导出预览
-  const wf = page.getByTestId('workflow-tab-tune');
-  await wf.scrollIntoViewIfNeeded();
-  await expect(page.getByTestId('workflow-viewer')).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
+  // 3. 1:1 真实桌面编辑器试玩台：滚入视口后自动装载桌面渲染进程并就绪，支持上方快捷切模板
+  const simWindow = page.getByTestId('sim-window');
+  await simWindow.scrollIntoViewIfNeeded();
+  await expect(page.getByTestId('sim-frame')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('sim-skeleton')).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByTestId('sim-quick-pick')).toHaveCount(SHOWCASE_COUNT);
 
-  await wf.click();
-  await expect(page.getByTestId('tune-controls')).toBeVisible();
-  const sliderThumb = page.getByTestId('tune-cols').getByRole('slider');
-  await sliderThumb.focus();
-  const colsBefore = Number(await page.getByTestId('tune-cols-value').innerText());
-  await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('ArrowRight');
-  expect(Number(await page.getByTestId('tune-cols-value').innerText())).toBeGreaterThan(colsBefore);
+  const simRoot = page.frameLocator('[data-testid="sim-frame"]').locator('#root');
+  await expect(simRoot).not.toBeEmpty();
 
-  const diagBtn = page.locator('[data-testid="tune-pattern"][data-value="diagonal"]');
-  await diagBtn.click();
-  await expect(diagBtn).toHaveAttribute('aria-pressed', 'true');
+  const iceQuick = page.locator('[data-testid="sim-quick-pick"][data-template="allay.builtin.ice-shatter"]');
+  await iceQuick.click();
+  await expect(iceQuick).toHaveAttribute('aria-pressed', 'true');
 
-  const twistBtn = page.locator('[data-testid="tune-spin"][data-value="twist"]');
-  await twistBtn.click();
-  await expect(twistBtn).toHaveAttribute('aria-pressed', 'true');
+  // 4. 模板精选卡片点击右上角按钮同步将模板送入上方真实桌面编辑器试玩台
+  const punchOpen = page.locator('[data-testid="template-card"][data-template="allay.builtin.block-punch"] [data-testid="template-open"]');
+  await punchOpen.scrollIntoViewIfNeeded();
+  await punchOpen.click();
+  await expect(page.locator('[data-testid="sim-quick-pick"][data-template="allay.builtin.block-punch"]')).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByTestId('workflow-tab-export').click();
-  await expect(page.getByTestId('export-preview-panel')).toBeVisible();
-
-  // 4. 特性卡交互：透明对比滑块 & 资源栈图层点击锁定
+  // 5. 特性卡交互：透明对比滑块 & 资源栈图层点击锁定
   const alphaSplit = page.getByTestId('alpha-split');
   await alphaSplit.scrollIntoViewIfNeeded();
-  await alphaSplit.fill('24');
-  await expect(alphaSplit).toHaveValue('24');
+  await alphaSplit.fill('28');
+  await expect(alphaSplit).toHaveValue('28');
 
   const layerZero = page.locator('[data-testid="stack-layer"][data-layer="0"]');
   await layerZero.click();
   await expect(layerZero).toHaveAttribute('aria-pressed', 'true');
-
-  // 5. 模板卡片点击「在顶部预览」切换首屏预览
-  const pixelCardOpen = page.locator('[data-testid="template-card"][data-template="allay.builtin.pixel-dissolve"] [data-testid="template-open"]');
-  await pixelCardOpen.scrollIntoViewIfNeeded();
-  await pixelCardOpen.click();
-  await expect(hero.getByTestId('live-template-name')).toHaveText(/像素溶解|Pixel dissolve/);
 });
 
-test('T-WEB-3 中英文和深浅色主题切换正常，无缺失文案键', async () => {
+test('T-WEB-3 剪辑点接缝：快速滚过剪辑点后自动落定终态并显露开场白，不遮挡后续点击', async () => {
   const { page } = s;
+  const cut = page.locator('#cut');
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.waitForTimeout(100);
+  await page.locator('#templates').scrollIntoViewIfNeeded();
+  await expect(cut).toHaveAttribute('data-settled', 'true', { timeout: 10_000 });
+  await expect(page.locator('#cut-title')).toBeVisible();
+  const overlay = page.getByTestId('cut-overlay');
+  await expect(overlay).toHaveAttribute('data-active', 'false');
+});
+
+test('T-WEB-4 中英文和深浅色主题（含 View Transitions 光圈擦除）切换正常，无缺失文案键', async () => {
+  const { page } = s;
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   const lang0 = await page.evaluate(() => document.documentElement.lang);
   const title0 = await page.locator('h1').innerText();
   for (let round = 0; round < 2; round++) {
@@ -168,11 +167,11 @@ test('T-WEB-3 中英文和深浅色主题切换正常，无缺失文案键', asy
     await page.getByTestId('toggle-theme').click();
     const theme = round === 0 ? (theme0 === 'dark' ? 'light' : 'dark') : theme0;
     await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
-    if (round === 0) expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe(bg0);
+    if (round === 0) await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe(bg0);
   }
 });
 
-test('T-WEB-4 非官方声明逐字醒目、正文不写模板数量、开发者头像均为同源实图', async () => {
+test('T-WEB-5 非官方声明逐字醒目、正文不写模板数量、开发者头像均为同源实图且页尾字标可读', async () => {
   const { page } = s;
   for (let round = 0; round < 2; round++) {
     const lang = (await page.evaluate(() => document.documentElement.lang)) as 'zh-CN' | 'en';
@@ -192,6 +191,8 @@ test('T-WEB-4 非官方声明逐字醒目、正文不写模板数量、开发者
     await expect.poll(() => page.evaluate(() => document.documentElement.lang)).not.toBe(lang);
   }
 
+  await expect(page.locator('[data-voxel-wordmark]')).toContainText('Allay Motion');
+
   const avatars = page.getByTestId('avatar');
   await expect(avatars).toHaveCount(3);
   await page.getByTestId('team').scrollIntoViewIfNeeded();
@@ -201,7 +202,7 @@ test('T-WEB-4 非官方声明逐字醒目、正文不写模板数量、开发者
   }
 });
 
-test('T-WEB-5 窄屏（390px）无横向溢出，首屏预览与切换正常，无报错、无外部请求', async () => {
+test('T-WEB-6 窄屏（390px）单行顶栏无横向溢出，自动切换紧凑试玩台、模板卡片能送模板进紧凑预览，无报错、无外部请求', async () => {
   const narrow = await launch(390);
   try {
     const { page } = narrow;
@@ -210,6 +211,14 @@ test('T-WEB-5 窄屏（390px）无横向溢出，首屏预览与切换正常，�
     const chip = hero.locator('[data-testid="live-chip"][data-template="allay.builtin.item-stinger"]');
     await chip.click();
     await expect(chip).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('sim-compact')).toBeVisible();
+    // 窄屏没有仿真器窗口：模板卡片的按钮把模板送进紧凑预览，并滚到预览
+    const punchOpen = page.locator('[data-testid="template-card"][data-template="allay.builtin.block-punch"] [data-testid="template-open"]');
+    await punchOpen.scrollIntoViewIfNeeded();
+    await punchOpen.click();
+    const compact = page.getByTestId('compact-viewer');
+    await expect(compact.locator('[data-testid="live-chip"][data-template="allay.builtin.block-punch"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(compact).toBeInViewport();
     await page.getByTestId('site-footer').scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
     expect(narrow.errors).toEqual([]);
@@ -219,7 +228,7 @@ test('T-WEB-5 窄屏（390px）无横向溢出，首屏预览与切换正常，�
   }
 });
 
-test('T-WEB-6 减少动效与字体拦截、rAF 停跑时，各级标题仍立即可见且不被遮挡', async () => {
+test('T-WEB-7 减少动效与字体拦截、rAF 停跑时，无剪辑盖层且各级标题立即可见', async () => {
   const bad = await launch();
   try {
     const { page } = bad;
@@ -231,6 +240,7 @@ test('T-WEB-6 减少动效与字体拦截、rAF 停跑时，各级标题仍立�
     await page.reload();
     await expect(page.getByTestId('site-nav')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.dataset.reducedMotion)).toBe('true');
+    await expect(page.getByTestId('cut-overlay')).toHaveCount(0);
 
     await expect(page.locator('h1')).toBeVisible();
     for (const h of await page.locator('h1, h2').all()) {

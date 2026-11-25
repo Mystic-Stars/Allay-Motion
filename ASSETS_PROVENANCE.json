@@ -43,7 +43,7 @@
     "manifest": "apps/website/public/mc/index.json",
     "generator": "pnpm website:mc",
     "license": "© Mojang Studios / Microsoft，保留所有权利；不在本仓库 GPL-3.0 许可范围内，仅用于官网展示",
-    "note": "方块目录、物品目录、界面贴图引用到的原版贴图及其 .mcmeta，外加悦灵的实体贴图 assets/minecraft/textures/entity/allay/allay.png（只给官网首屏的体素悦灵取色；用户 2026-11-14 明确批准，原话「我允许」），文件在 mc/ 下的路径就是它在 jar 里的原始路径，内容未修改；每个文件的原始路径、SHA-256、字节数见 manifest。只对官网生效的放宽：用户 2026-11-14 批准、经统筹会话转达（docs/decisions.md 官网 · 原版素材）。桌面应用、packages/*、安装包、测试夹具里仍然没有任何 Mojang 文件。"
+    "note": "方块、物品、界面贴图及其 .mcmeta；另含 2026-11-14 批准的悦灵实体贴图（只供官网首屏取色），以及维护者 khiqwq 2026-11-24 在 PR #16 评论中确认的 nether_portal.png 和 nether_portal.png.mcmeta（核对过与 1.21.1 原文件 SHA-256 一致，只供官网传送门展示；docs/decisions.md 官网 · 原版素材的补充）。文件内容未修改，每个文件的 jar 原始路径、SHA-256、字节数见 manifest。例外不适用于桌面应用、packages/*、安装包和测试夹具。"
   },
   {
     "path": "apps/website/public/team/mystic-stars.png",
