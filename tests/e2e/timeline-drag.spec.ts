@@ -15,11 +15,29 @@ async function waitReady(page: Page): Promise<void> {
   await page.waitForFunction(() => window.__allayTest?.previewUpToDate() === true, undefined, { timeout: 30_000 });
 }
 
+/**
+ * 模板库的封面做完：队列空、没有在做的。启动后模板库按需给第一屏和上下各一屏生成封面，每张在主线程上编码 PNG；
+ * 软件渲染（CI 的 WARP）下要做十几秒以上，正好和拖动重叠，长任务观察器会把它们记成拖动的长任务。
+ * 同 T-UI-7（m4.spec.ts 的 coversReady）、T-ARC-5（m1.spec.ts）：先等它做完再装观察器
+ */
+async function coversIdle(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const s = window.__allayTest!.coverStats();
+          return s.queue.length === 0 && s.running === null;
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+}
+
 /** 在页面里记录每一次 pointermove：被拖元素是否还在页面上、是否还持有捕获，以及处理这次移动的同步耗时 */
 async function instrument(page: Page, selector: string): Promise<void> {
   await page.evaluate((sel) => {
     const el = document.querySelector<HTMLElement>(sel)!;
-    const log = { moves: 0, detached: 0, uncaptured: 0, lost: 0, handlerMs: [] as number[], longTasks: [] as number[] };
+    const log = { moves: 0, detached: 0, uncaptured: 0, lost: 0, handlerMs: [] as number[], longTasks: [] as number[], loaf: [] as string[] };
     let t0 = 0;
     window.addEventListener('pointermove', () => (t0 = performance.now()), true);
     window.addEventListener('pointermove', (e) => {
@@ -34,6 +52,12 @@ async function instrument(page: Page, selector: string): Promise<void> {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) log.longTasks.push(e.duration);
     }).observe({ type: 'longtask' });
+    // 只用来诊断（不断言）：超过 50 ms 的动画帧里跑了哪些脚本，长任务出现时看是不是拖动自己的处理
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as (PerformanceEntry & { blockingDuration: number; scripts: { invoker: string; sourceFunctionName: string; duration: number }[] })[]) {
+        if (e.blockingDuration > 0) log.loaf.push(`${Math.round(e.duration)}ms[${e.scripts.map((x) => `${x.invoker}|${x.sourceFunctionName}:${Math.round(x.duration)}`).join(' ')}]`);
+      }
+    }).observe({ type: 'long-animation-frame' });
     (window as unknown as { __drag: typeof log & { el: HTMLElement } }).__drag = Object.assign(log, { el });
   }, selector);
 }
@@ -45,11 +69,12 @@ interface DragLog {
   lost: number;
   handlerMs: number[];
   longTasks: number[];
+  loaf: string[];
 }
 const readLog = (page: Page) =>
   page.evaluate(() => {
     const d = (window as unknown as { __drag: DragLog }).__drag;
-    return { moves: d.moves, detached: d.detached, uncaptured: d.uncaptured, lost: d.lost, handlerMs: d.handlerMs, longTasks: d.longTasks };
+    return { moves: d.moves, detached: d.detached, uncaptured: d.uncaptured, lost: d.lost, handlerMs: d.handlerMs, longTasks: d.longTasks, loaf: d.loaf };
   });
 
 function summarize(ms: number[]): string {
@@ -84,6 +109,7 @@ test.describe('时间轴拖动', () => {
   test('分界线：一串小步拖动跟手，过程中不丢指针捕获，只记一步撤销', async () => {
     const { page } = launched;
     await waitReady(page);
+    await coversIdle(page);
     const before = await page.evaluate(() => ({ params: window.__allayTest!.project().params, tr: window.__allayTest!.transport(), history: window.__allayTest!.history() }));
     const from = before.params.inDuration as number;
     const duration = before.tr.duration;
@@ -116,7 +142,7 @@ test.describe('时间轴拖动', () => {
     const expected = Math.round((from + total * secPerPx) * 60) / 60;
     annotate({
       type: '分界线拖动',
-      description: `from=${from} expected=${expected.toFixed(4)} got=${(after.params.inDuration as number).toFixed(4)} pointer=${(x0 + total).toFixed(1)} boundary=${boundaryX.toFixed(1)} pxPerFrame=${pxPerFrame.toFixed(2)} moves=${log.moves} detached=${log.detached} uncaptured=${log.uncaptured} lost=${log.lost} handler: ${summarize(log.handlerMs)} cdpMove: ${summarize(moveMs)} longTasks=${JSON.stringify(log.longTasks)}`,
+      description: `from=${from} expected=${expected.toFixed(4)} got=${(after.params.inDuration as number).toFixed(4)} pointer=${(x0 + total).toFixed(1)} boundary=${boundaryX.toFixed(1)} pxPerFrame=${pxPerFrame.toFixed(2)} moves=${log.moves} detached=${log.detached} uncaptured=${log.uncaptured} lost=${log.lost} handler: ${summarize(log.handlerMs)} cdpMove: ${summarize(moveMs)} longTasks=${JSON.stringify(log.longTasks)} loaf=${JSON.stringify(log.loaf)}`,
     });
     expect(log.moves).toBeGreaterThanOrEqual(STEPS);
     expect(log.detached, '拖动中分界线被卸载').toBe(0);
@@ -149,6 +175,7 @@ test.describe('时间轴拖动', () => {
   test('播放头：一串小步擦洗跟手，过程中不丢指针捕获，时间吸附到帧', async () => {
     const { page } = launched;
     await waitReady(page);
+    await coversIdle(page);
     const duration = (await page.evaluate(() => window.__allayTest!.transport())).duration;
     const lanes = (await page.getByTestId('transport-track').boundingBox())!;
     const pxPerFrame = lanes.width / (duration * 60);
@@ -177,7 +204,7 @@ test.describe('时间轴拖动', () => {
     const tr = await page.evaluate(() => window.__allayTest!.transport());
     annotate({
       type: '播放头擦洗',
-      description: `expected=${expected.toFixed(4)} got=${tr.time.toFixed(4)} worstLag=${worstLag.toFixed(1)}px pxPerFrame=${pxPerFrame.toFixed(2)} moves=${log.moves} detached=${log.detached} uncaptured=${log.uncaptured} lost=${log.lost} handler: ${summarize(log.handlerMs)} cdpMove: ${summarize(moveMs)} longTasks=${JSON.stringify(log.longTasks)}`,
+      description: `expected=${expected.toFixed(4)} got=${tr.time.toFixed(4)} worstLag=${worstLag.toFixed(1)}px pxPerFrame=${pxPerFrame.toFixed(2)} moves=${log.moves} detached=${log.detached} uncaptured=${log.uncaptured} lost=${log.lost} handler: ${summarize(log.handlerMs)} cdpMove: ${summarize(moveMs)} longTasks=${JSON.stringify(log.longTasks)} loaf=${JSON.stringify(log.loaf)}`,
     });
     expect(log.detached).toBe(0);
     expect(log.uncaptured).toBe(0);
