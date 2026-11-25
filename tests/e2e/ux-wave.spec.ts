@@ -234,6 +234,9 @@ test.describe('T-UX-6 引导里下载原版资源（本机假服务器）', () =
       const { app, page } = await launchApp(dir, { ALLAY_E2E_MOJANG_ORIGIN: server.origin }, { firstRun: true, waitFor: '[data-testid="onboarding"]' });
       const ob = page.getByTestId('onboarding');
       await page.getByTestId('onboarding-rail-language').waitFor();
+      // 首次启动的界面语言跟系统走（CI 的机器是英文，开发机是中文）；下面按中文的读数判，先在引导里选定中文
+      await page.getByTestId('onboarding-language-zh-CN').click();
+      await expect.poll(() => htmlAttr(page, 'lang')).toBe('zh-CN');
       await page.getByTestId('onboarding-next').click();
       await page.getByTestId('onboarding-next').click();
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-step', 'assets');
