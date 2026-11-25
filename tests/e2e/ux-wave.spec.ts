@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { requiredTextures } from '../../packages/assets/src/index';
@@ -307,6 +307,8 @@ test.describe('T-UX-6 引导里下载原版资源（本机假服务器）', () =
 
 test('T-UX-7 改快捷键：新按键经 dispatcher 触发命令；冲突、保留键、菜单显示、重启后保留、全部恢复默认', async () => {
   const dir = makeUserDataDir();
+  // 界面语言定成中文：下面按菜单的中文名找“视图”。不写的话跟系统走，CI 的机器是英文（菜单叫 View）
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ formatVersion: 1, ui: { onboardingCompleted: true, language: 'zh-CN' } }));
   try {
     let { app, page } = await launchApp(dir);
     const errors = watchErrors(page);
