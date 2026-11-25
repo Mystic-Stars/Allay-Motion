@@ -293,6 +293,10 @@ for (const theme of ['dark', 'light'] as const) {
     const ctx = await start({ theme, language: 'zh-CN' });
     const { page } = ctx;
     try {
+      // 内容区定成 1440×900（6.3 的默认尺寸）。不设时按默认外框尺寸建窗，内容区随系统缩放有 1–3 px 的取整误差
+      // （window.ts、docs/decisions.md M4“窗口大小记的是内容区尺寸”）：原来的基线是在 150% 缩放的机器上截的，高 902；CI 是 100%，900
+      await ctx.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1440, 900));
+      await expect.poll(() => page.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([1440, 900]);
       // 封面生成完（可见范围里的卡片都有了）、预览在第 0 帧
       await coversReady(page);
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="template-list"] [data-in-view="true"] [data-cover="loading"]').length === 0);
@@ -300,13 +304,14 @@ for (const theme of ['dark', 'light'] as const) {
       await upToDate(page);
       await page.waitForTimeout(500);
       // 引擎画出来的东西（预览画布、封面、方块缩略图）随显卡不同，蒙住；悦灵头像会眨眼，也蒙住。
+      // 状态栏的版本号每次发版都变（基线停在 v0.2.0，发 v0.3.0 后就对不上），也蒙住。
       // 模板库的封面不用蒙版：蒙版按元素的方框画、不管滚动容器的裁切，面板下边缘露出一半的卡片会盖到时间轴上。
       // 改成把卡片里的图藏起来，只留界面自己画的棋盘格底、选中框、名称和时长
       await page.addStyleTag({ content: '[data-testid="template-list"] img, [data-testid="template-list"] canvas { visibility: hidden !important; }' });
       await expect(page).toHaveScreenshot(`ui-${theme}.png`, {
         animations: 'disabled',
         caret: 'hide',
-        mask: [page.locator('canvas:not([data-testid="template-list"] canvas)'), page.locator('img:not([data-testid="template-list"] img)'), page.locator('[data-allay]')],
+        mask: [page.locator('canvas:not([data-testid="template-list"] canvas)'), page.locator('img:not([data-testid="template-list"] img)'), page.locator('[data-allay]'), page.getByTestId('status-version')],
         maxDiffPixelRatio: 0.01,
         timeout: 30_000,
       });

@@ -65,7 +65,11 @@ export function StatusBar() {
           {t('status.previewFps', { fps: Math.round(fps) })}
         </span>
       )}
-      {version && <span className="num">{t('status.version', { version })}</span>}
+      {version && (
+        <span className="num" data-testid="status-version">
+          {t('status.version', { version })}
+        </span>
+      )}
     </footer>
   );
 }
