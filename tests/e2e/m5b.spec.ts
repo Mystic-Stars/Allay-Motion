@@ -54,7 +54,9 @@ async function upToDate(page: Page): Promise<void> {
 
 async function coversReady(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="template-list"] img').first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('gallery-loader')).toHaveAttribute('data-allay-loader-phase', 'idle');
+  // 同 m4.spec.ts 的 coversReady：start() 等到假原版层探测完，资源栈一变封面就按新素材整批重画（“正在用新素材重画封面…”），
+  // 第一屏的封面画完加载编排才结束。排在最前面的是较重的方块类模板，软件渲染下超过默认的 5 秒；和等第一张封面一样给 30 秒
+  await expect(page.getByTestId('gallery-loader')).toHaveAttribute('data-allay-loader-phase', 'idle', { timeout: 30_000 });
 }
 
 async function stop(ctx: Ctx): Promise<void> {
