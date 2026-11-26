@@ -118,6 +118,15 @@ export async function adaptToRenderer(page: Page): Promise<string> {
 }
 
 /**
+ * 等一件随渲染器变慢的事（例如一次导出做完）的时限：识别出软件渲染（CI 的 WARP）时乘 SOFTWARE_TIMEOUT_FACTOR，
+ * 有显卡时原样返回。和测试自身时限的放宽同一个依据（docs/decisions.md M8），判定不在这里放宽。
+ * 按页面现问渲染器，launchApp 在 beforeAll 里调用的测试也适用
+ */
+export async function renderBoundTimeout(page: Page, ms: number): Promise<number> {
+  return isSoftwareRenderer(await rendererOf(page).catch(() => 'unknown')) ? ms * SOFTWARE_TIMEOUT_FACTOR : ms;
+}
+
+/**
  * 逐个内置模板走一遍的测试：当前测试的时限再加上每个模板 perTemplateMs（软件渲染下这一份同样乘 SOFTWARE_TIMEOUT_FACTOR）。
  * 内置模板一批批加进来（docs/template-catalog.md），按十几个模板定的固定时限迟早不够；在知道模板数之后调用。
  */

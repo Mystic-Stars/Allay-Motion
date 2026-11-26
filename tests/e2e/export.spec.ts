@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { decodeAllRgba, probe, processAlive } from '../export/ffmpeg';
 import { frameCount } from '../../packages/engine/src/frames';
-import { ROOT, SOFTWARE_TIMEOUT_FACTOR, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched } from './helpers';
+import { ROOT, SOFTWARE_TIMEOUT_FACTOR, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched, renderBoundTimeout } from './helpers';
 import { isSoftwareRenderer } from '../engine/software';
 
 // M7 导出完善的端到端测试（docs/05-export.md 5.10、docs/08-milestones.md M7）：
@@ -276,7 +276,7 @@ test.describe('导出对话框与任务', () => {
       await page.getByTestId('export-preset-prores4444').click();
       await page.getByTestId('export-quality-draft').click();
       await page.getByTestId('export-start').click();
-      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
       expect(await command(page, 'exportTask.get', { taskId: '00000000-0000-4000-8000-000000000000' })).toBeNull();
       const path = (await page.getByTestId('export-path').textContent())!;
       expect(readdirSync(out)).toEqual([path.split(/[\\/]/).at(-1)]);
@@ -360,7 +360,7 @@ test.describe('导出对话框与任务', () => {
       await expect(page.getByTestId('export-estimate')).toContainText(/MB/);
       await page.getByTestId('export-quality-draft').click();
       await page.getByTestId('export-start').click();
-      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
       const path = (await page.getByTestId('export-path').textContent())!;
       expect(path).toBe(join(out, 'odd size.mp4'));
       expect(probe(path, 'stream=codec_name,width,height,nb_read_frames')).toMatchObject({ codec_name: 'h264', width: '1000', height: '562', nb_read_frames: '67' });
@@ -373,7 +373,7 @@ test.describe('导出对话框与任务', () => {
       // 重名时不覆盖
       await page.getByTestId('export-again').click();
       await page.getByTestId('export-start').click();
-      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
       await expect(page.getByTestId('export-path')).toHaveText(join(out, 'odd size (2).mp4'));
     } finally {
       await app.close();

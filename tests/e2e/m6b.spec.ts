@@ -9,7 +9,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { encodeWav } from '../../apps/desktop/src/renderer/audio/wav';
 import { solidPng, tex } from '../unit/helpers/resource-fixtures';
 import { startFakeMojang } from './fake-mojang';
-import { launchApp, makeUserDataDir, removeUserDataDir, requirePinnedFfmpeg, ROOT } from './helpers';
+import { launchApp, makeUserDataDir, removeUserDataDir, requirePinnedFfmpeg, ROOT, renderBoundTimeout } from './helpers';
 
 type Locale = { audio: { missing: string }; editor: { sound: { categories: Record<string, string> } } };
 const locale = (name: string): Locale => JSON.parse(readFileSync(join(ROOT, 'apps/desktop/src/renderer/i18n/locales', name), 'utf8')) as Locale;
@@ -239,7 +239,7 @@ test.describe('T-EXP-4 端到端', () => {
         await expect(page.getByTestId('export-dialog')).toBeVisible();
         await page.getByTestId('export-quality-draft').click();
         await page.getByTestId('export-start').click();
-        await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+        await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
         const path = (await page.getByTestId('export-path').textContent())!;
         expect(readdirSync(out)).toHaveLength(1);
         const s = streams(path);
@@ -366,7 +366,7 @@ test.describe('M6b 音效库', () => {
       await page.getByTestId('export-sounds-fetch').click();
       await expect(page.getByTestId('export-sounds-remote')).toHaveCount(0);
       await page.getByTestId('export-start').click();
-      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
       const path = (await page.getByTestId('export-path').textContent())!;
       expect(streams(path).filter((x) => x.codec_type === 'audio')).toHaveLength(1);
       // 同名的第二个文件加了 “ (2)”

@@ -5,7 +5,7 @@ import { requiredTextures } from '../../packages/assets/src/index';
 import { brandMessages } from '../../packages/ui/src/brand/messages';
 import { catalogJarEntries, makeCatalogGame } from '../unit/helpers/resource-fixtures';
 import { writeFakeMascot } from './fake-mascot';
-import { DESKTOP_DIR, ELECTRON_PATH, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, requirePinnedFfmpeg, seedSettings } from './helpers';
+import { DESKTOP_DIR, ELECTRON_PATH, launchApp, makeUserDataDir, readMainLog, removeUserDataDir, requirePinnedFfmpeg, seedSettings, renderBoundTimeout } from './helpers';
 
 // M5 后半（docs/07-allay-mascot.md 7.10）：T-ALY-3、T-ALY-4、T-ALY-5（图集版）、T-ALY-6，启动画面，产物缺失时的占位。
 // T-ALY-1、T-ALY-7 在 tests/unit/T-ALY.mascot-bake.test.ts（烘焙）；T-ALY-2 在 tests/unit/T-ALY-2.loader-timing.test.ts 和 m4.spec.ts。
@@ -177,7 +177,7 @@ test('T-ALY-3 端到端跑完一整套操作：任意时刻 DOM 里的全身悦�
     // 4. 导出：进度、封装、完成后的舞蹈（第 5 项）
     await page.getByTestId('topbar-export').click();
     await page.getByTestId('export-start').click();
-    await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+    await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
     await page.waitForTimeout(800);
     await page.getByTestId('export-close').click();
 
@@ -245,7 +245,7 @@ test('T-ALY-4 开启 prefers-reduced-motion：悦灵相关元素上没有 transf
     // 导出（第 5 项）
     await page.getByTestId('topbar-export').click();
     await page.getByTestId('export-start').click();
-    await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+    await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', 'done', { timeout: await renderBoundTimeout(page, 60_000) });
     await page.waitForTimeout(800);
     // 顶栏头像：点击不转圈
     await page.getByTestId('export-close').click();
@@ -472,7 +472,7 @@ test('M5b × M7 导出编排：进度页和结果页共用同一个悦灵进度�
       if (finish === 'canceled') await page.getByTestId('export-cancel').click();
       await page.evaluate(() => window.__allayTest!.pauseExportAfter(null));
       await page.evaluate(() => window.__allayTest!.resumeExport());
-      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', finish, { timeout: 60_000 });
+      await expect(page.getByTestId('export-result')).toHaveAttribute('data-kind', finish, { timeout: await renderBoundTimeout(page, 60_000) });
       await expect(allay).toHaveAttribute('data-phase', finish);
       expect(await allay.evaluate((el) => (el as HTMLElement & { __mark?: number }).__mark)).toBe(1);
       await page.getByTestId('export-close').click();
