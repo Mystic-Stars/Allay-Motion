@@ -4,7 +4,7 @@ import type * as NodePath from 'node:path';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { decodeAllRgba, probe, processAlive } from '../export/ffmpeg';
-import { ROOT, launchApp, makeUserDataDir, readFixture, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched } from './helpers';
+import { ROOT, SOFTWARE_TIMEOUT_FACTOR, launchApp, makeUserDataDir, readFixture, readMainLog, removeUserDataDir, rendererOf, requirePinnedFfmpeg, type Launched } from './helpers';
 import { isSoftwareRenderer } from '../engine/software';
 
 type Locale = { preview: { unresponsive: string }; export: { errors: Record<string, string> } };
@@ -308,16 +308,18 @@ test.describe('导出', () => {
     const ffmpeg = requirePinnedFfmpeg();
     const { app, page } = await launchApp(dir, { ALLAY_E2E_EXPORT_TARGET: out, ALLAY_FFMPEG: ffmpeg });
     try {
+      // 软件渲染（CI 的 WARP）不是参考机器：测试时限在 launchApp 里已放宽，等导出结束的时限同样乘 SOFTWARE_TIMEOUT_FACTOR（判定不变，docs/decisions.md M8）
+      const gpu = await rendererOf(page);
+      const software = isSoftwareRenderer(gpu);
       const started = Date.now();
       await exportViaUi(page);
       const result = page.getByTestId('export-result');
-      await expect(result).toHaveAttribute('data-kind', 'done', { timeout: 60_000 });
+      await expect(result).toHaveAttribute('data-kind', 'done', { timeout: 60_000 * (software ? SOFTWARE_TIMEOUT_FACTOR : 1) });
       const seconds = (Date.now() - started) / 1000;
       // 预算：1080p60、2 秒、标准画质 ≤ 20 秒（2.11）；T1 默认参数只有 1.1 秒，用同一个上限。
-      // 软件渲染（CI 的 WARP）不是参考机器，只记数字、不判定（同 T-ARC-7，docs/decisions.md M8）
-      const gpu = await rendererOf(page);
+      // 软件渲染下只记数字、不判定（同 T-ARC-7，docs/decisions.md M8）
       test.info().annotations.push({ type: 'T-EXP-7 seconds', description: `${gpu}; ${seconds.toFixed(2)}` });
-      if (!isSoftwareRenderer(gpu)) expect(seconds).toBeLessThanOrEqual(20);
+      if (!software) expect(seconds).toBeLessThanOrEqual(20);
       const path = (await page.getByTestId('export-path').textContent())!;
       expect(path.startsWith(out)).toBe(true);
       expect(path).toMatch(/_1920x1080_60fps\.mov$/);
