@@ -106,8 +106,12 @@ export class Splash {
   /** 主窗口就绪后调用：等启动画面至少显示满 600 ms 再返回（之后由调用方显示主窗口，再 close） */
   async ready(): Promise<void> {
     const since = this.shownAt ?? this.createdAt;
-    const left = since + SPLASH_MIN_MS - Date.now();
-    if (left > 0 && !this.closing) await new Promise((r) => setTimeout(r, left));
+    // 计时器可能比 Date.now() 量出来的早 1 ms 左右到点（CI 上量到过 visibleMs 599）：没满就再等，直到真的满 600 ms
+    for (;;) {
+      const left = since + SPLASH_MIN_MS - Date.now();
+      if (left <= 0 || this.closing) return;
+      await new Promise((r) => setTimeout(r, left));
+    }
   }
 
   /** 淡出并关闭 */
