@@ -12,6 +12,8 @@ import {
   exportBaseName,
   frameTimecode,
   sanitizeFileName,
+  H264_DIAGNOSTIC_ONLY,
+  H264_ENCODERS,
   H264_PROBE_CHECK,
   type H264Probe,
 } from '../../apps/desktop/src/shared/export';
@@ -136,6 +138,11 @@ describe('FFmpeg 命令行（5.3）', () => {
     expect(trialArgs('h264_amf', 'x').join(' ')).toContain('-rc cqp -qp_i 18 -qp_p 18');
     // 只解出纯色的两帧
     expect(trialDecodeArgs('probe.h264')).toEqual(['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', 'probe.h264', '-vf', "select='gte(n,10)'", '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+  });
+
+  it('候选及顺序（5.3）：h264_amf 暂时不在候选里，只记诊断信息', () => {
+    expect([...H264_ENCODERS]).toEqual(['h264_nvenc', 'h264_qsv', 'h264_mf', 'h264_videotoolbox', 'libx264', 'libopenh264']);
+    expect([...H264_DIAGNOSTIC_ONLY]).toEqual(['h264_amf']);
   });
 
   it('试编码里运动之后的纯色帧：和 T-EXP-7 判绿幕末帧同一口径（超过 4 的像素 < 0.1%，没有超过 16 的）', () => {

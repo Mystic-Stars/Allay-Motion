@@ -142,7 +142,14 @@ export type ExportStartResult = { ok: true; job: ExportStarted } | { ok: false; 
  * 探测顺序（5.3 的表）。libx264、libopenh264 只在所用构建里有时才试；libopenh264 是否保留由人决定（H-H264，默认保留、排最后）。
  * h264_videotoolbox 是 macOS 的系统编码器（只在 macOS 的构建里有）；前四个只在 Windows 的构建里有，顺序互不影响。
  */
-export const H264_ENCODERS = ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_mf', 'h264_videotoolbox', 'libx264', 'libopenh264'] as const;
+/**
+ * 绿幕 MP4 的 H.264 编码器候选及探测顺序（docs/05-export.md 5.3）。h264_amf 暂时拿掉：它的参数从没在 AMD 显卡上实测过，
+ * CI 的机器上应用里的 AMF 能通过试编码、导出的帧却不稳定（末帧最大误差 42、79，首帧 6），见 docs/decisions.md。
+ * 在 AMD 显卡上实测色彩和末帧都通过后再加回。探测时仍记一行它的诊断信息（H264_DIAGNOSTIC_ONLY），不参与选择
+ */
+export const H264_ENCODERS = ['h264_nvenc', 'h264_qsv', 'h264_mf', 'h264_videotoolbox', 'libx264', 'libopenh264'] as const;
+/** 只记诊断信息、不参与选择的编码器 */
+export const H264_DIAGNOSTIC_ONLY = ['h264_amf'] as const;
 export type H264Encoder = (typeof H264_ENCODERS)[number];
 
 export const EncoderAttemptSchema = z.strictObject({
@@ -157,11 +164,11 @@ export const EncoderAttemptSchema = z.strictObject({
 export type EncoderAttempt = z.infer<typeof EncoderAttemptSchema>;
 
 /**
- * 探测方法的版本：3 = 按 1080p60 试编码以后解回来核对运动之后的纯色帧（docs/05-export.md 5.3）。缓存里没有这一项
+ * 探测方法的版本：4 = 候选里没有 h264_amf，按 1080p60 试编码以后解回来核对运动之后的纯色帧（docs/05-export.md 5.3）。缓存里没有这一项
  * 或版本不同的结果当作过期、重新探测（没有这一项的旧方法只看能不能编出来，CI 的机器上会选中末帧有残影的 h264_amf；
- * 2 是同样的核对但用 256×144，同样测不出来）
+ * 2 是同样的核对但用 256×144，同样测不出来；3 的候选里还有 h264_amf，缓存里可能记着它）
  */
-export const H264_PROBE_CHECK = 3;
+export const H264_PROBE_CHECK = 4;
 
 export const H264ProbeSchema = z.strictObject({
   /** 探测时的 FFmpeg 版本（ffmpeg -version 的第一行）；版本变了缓存作废 */

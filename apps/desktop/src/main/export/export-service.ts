@@ -17,11 +17,12 @@ import {
   type FfmpegInfo,
   type H264Probe,
   H264_PROBE_CHECK,
+  H264_DIAGNOSTIC_ONLY,
 } from '../../shared/export';
 import type { Logger } from '../logger';
 import type { SettingsStore } from '../settings-store';
 import type { FolderService } from '../folders';
-import { probeH264 } from './encoder-probe';
+import { diagnoseEncoder, probeH264 } from './encoder-probe';
 import { buildInfo, locateFfmpeg, probeCaps, type FfmpegCaps } from './ffmpeg-locate';
 import { ExportJob, ExportJobError, uniquePath } from './export-job';
 import { PRESET_AUDIO_ENCODER } from './ffmpeg-args';
@@ -102,6 +103,12 @@ export class ExportService {
     const result = await probeH264({ ffmpeg, version: caps.version, listed: caps.encoders, candidates: this.opts.h264Candidates ?? undefined });
     await this.opts.settings.updateExport({ h264: result });
     this.opts.log.info('export', 'h264 encoders probed', { encoder: result.encoder, attempts: result.attempts });
+    // 拿掉的候选（h264_amf）只记一行诊断，以后在 AMD 显卡上查它时用（docs/decisions.md），不参与选择
+    for (const encoder of H264_DIAGNOSTIC_ONLY) {
+      if (!caps.encoders.has(encoder)) continue;
+      const d = await diagnoseEncoder(ffmpeg, encoder);
+      this.opts.log.info('export', 'h264 diagnostic-only encoder', { encoder, ok: d.ok, lines: d.lines });
+    }
     return result;
   }
 

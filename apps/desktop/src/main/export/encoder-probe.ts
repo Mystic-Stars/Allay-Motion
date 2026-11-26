@@ -148,6 +148,26 @@ async function trial(ffmpeg: string, encoder: string, timeoutMs: number, tempDir
   }
 }
 
+/**
+ * 只为诊断：用 -loglevel verbose 编 8 帧 256×144 到空设备，取输出里提到这个编码器的行（设备、驱动、初始化失败的原因）。
+ * 结果只记日志，不参与选择（H264_DIAGNOSTIC_ONLY）
+ */
+export function diagnoseEncoder(ffmpeg: string, encoder: string, timeoutMs = 20_000): Promise<{ ok: boolean; lines: string[] }> {
+  const args = ['-hide_banner', '-loglevel', 'verbose', '-f', 'lavfi', '-i', 'color=c=black:s=256x144:r=30', '-frames:v', '8', '-c:v', encoder, '-f', 'null', '-'];
+  const key = encoder.replace(/^h264_/, '').toLowerCase();
+  return new Promise((resolve) => {
+    execFile(ffmpeg, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, _stdout, stderr) => {
+      const lines = String(stderr)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.toLowerCase().includes(key))
+        .slice(-12)
+        .map((l) => l.slice(0, 300));
+      resolve({ ok: !error, lines });
+    });
+  });
+}
+
 /** 按顺序试，第一个通过的胜出；之后的候选不再试 */
 export async function probeH264(opts: ProbeH264Options): Promise<H264Probe> {
   const attempts: EncoderAttempt[] = [];
