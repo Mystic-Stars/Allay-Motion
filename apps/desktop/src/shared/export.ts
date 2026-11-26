@@ -157,10 +157,11 @@ export const EncoderAttemptSchema = z.strictObject({
 export type EncoderAttempt = z.infer<typeof EncoderAttemptSchema>;
 
 /**
- * 探测方法的版本：2 = 试编码以后解回来核对末帧画质（docs/05-export.md 5.3）。缓存里没有这一项或版本不同的结果
- * 当作过期、重新探测（1 只看能不能编出来，CI 的机器上会选中末帧有残影的 h264_amf）
+ * 探测方法的版本：3 = 按 1080p60 试编码以后解回来核对运动之后的纯色帧（docs/05-export.md 5.3）。缓存里没有这一项
+ * 或版本不同的结果当作过期、重新探测（没有这一项的旧方法只看能不能编出来，CI 的机器上会选中末帧有残影的 h264_amf；
+ * 2 是同样的核对但用 256×144，同样测不出来）
  */
-export const H264_PROBE_CHECK = 2;
+export const H264_PROBE_CHECK = 3;
 
 export const H264ProbeSchema = z.strictObject({
   /** 探测时的 FFmpeg 版本（ffmpeg -version 的第一行）；版本变了缓存作废 */

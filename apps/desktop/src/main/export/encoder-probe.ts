@@ -22,12 +22,16 @@ export interface ProbeH264Options {
   tempDir?: string;
 }
 
-const TRIAL_W = 256;
-const TRIAL_H = 144;
-const TRIAL_FPS = 30;
+/**
+ * 按默认的导出规格试（1080p60，编码器参数也取这个规格的）。原来用 256×144、30 fps：CI 的机器上 h264_amf 在这么小的
+ * 画面上编得干净，按 1080p60 导出时末帧却有残影（最大误差 42），小画面测不出来（docs/decisions.md）
+ */
+const TRIAL_W = 1920;
+const TRIAL_H = 1080;
+const TRIAL_FPS = 60;
 /** 前面这么多帧是有运动的测试画面，之后是纯色 */
-const TRIAL_MOTION_FRAMES = 12;
-const TRIAL_FRAMES = 16;
+const TRIAL_MOTION_FRAMES = 10;
+const TRIAL_FRAMES = 12;
 /** 末帧应是的纯色：绿幕的默认底色 #00FF00（5.3 ④） */
 export const TRIAL_COLOR = [0, 255, 0] as const;
 /**
@@ -40,12 +44,11 @@ export const TRIAL_FLAT_RATIO = 0.001;
 export const TRIAL_MAX_ERROR = 16;
 
 /**
- * 试编码的命令行：12 帧有运动的合成画面（testsrc2）接 4 帧纯绿 → 与导出相同的色彩滤镜和比特流滤镜 → 一个裸 H.264 文件。
- * 编码器参数取 1080p60 导出时的（5.3 的表）：按码率的编码器（h264_mf、libopenh264）要是按 256×144 等比缩放只剩
- * 0.2 Mbps，画质测不准；按质量参数的编码器（nvenc、qsv、amf）和分辨率无关，与实际导出相同。
+ * 试编码的命令行：10 帧有运动的合成画面（testsrc2）接 2 帧纯绿 → 与导出相同的色彩滤镜、编码器参数（5.3 的表，1080p60）
+ * 和比特流滤镜 → 一个裸 H.264 文件。
  * 末帧要回到纯色：转场的首末帧就是这样（绿幕 MP4 首末帧是纯底色），有的编码器能编出来，但运动之后的纯色帧上留着
  * 上一帧的残影（CI 的机器上应用选中的 h264_amf：1080p 末帧最大误差 42；这台开发机上 h264_mf 在这段试编码里
- * 紧跟运动的那帧最大 20、15% 的像素超过 4，见 docs/decisions.md）。
+ * 最大 63、0.56% 的像素超过 4，见 docs/decisions.md）。
  */
 export function trialArgs(encoder: string, output: string): string[] {
   const size = `${TRIAL_W}x${TRIAL_H}`;
@@ -70,7 +73,7 @@ export function trialArgs(encoder: string, output: string): string[] {
     String(TRIAL_FRAMES),
     '-c:v',
     encoder,
-    ...h264EncoderArgs(encoder, 1920, 1080, 60),
+    ...h264EncoderArgs(encoder, TRIAL_W, TRIAL_H, TRIAL_FPS),
     '-bsf:v',
     H264_METADATA_BSF,
     '-f',
@@ -80,9 +83,9 @@ export function trialArgs(encoder: string, output: string): string[] {
   ];
 }
 
-/** 把试编码的结果解成 RGBA（和测试回读用的同一种解法：FFmpeg 的缺省转换） */
+/** 把试编码里的纯色帧解成 RGBA（和测试回读用的同一种解法：FFmpeg 的缺省转换）；只输出纯色那几帧，省内存 */
 export function trialDecodeArgs(input: string): string[] {
-  return ['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', input, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'];
+  return ['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', input, '-vf', `select='gte(n,${TRIAL_MOTION_FRAMES})'`, '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'];
 }
 
 /** 一帧（RGBA）与纯色的误差：每个像素取三个通道里最大的差；worst 是全帧最大，over 是超过 TRIAL_FLAT_ERROR 的像素数 */
@@ -100,7 +103,7 @@ export function solidFrameError(rgba: Uint8Array): { worst: number; over: number
 
 function run(ffmpeg: string, args: string[], timeoutMs: number): Promise<{ ok: true; stdout: Buffer } | { ok: false; detail: string }> {
   return new Promise((resolve) => {
-    execFile(ffmpeg, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'buffer' }, (error, stdout, stderr) => {
+    execFile(ffmpeg, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: (TRIAL_FRAMES - TRIAL_MOTION_FRAMES + 1) * TRIAL_W * TRIAL_H * 4, encoding: 'buffer' }, (error, stdout, stderr) => {
       if (!error) {
         resolve({ ok: true, stdout });
         return;
@@ -123,13 +126,14 @@ async function trial(ffmpeg: string, encoder: string, timeoutMs: number, tempDir
     const decoded = await run(ffmpeg, trialDecodeArgs(file), timeoutMs);
     if (!decoded.ok) return { encoder, result: 'failed', detail: `decode: ${decoded.detail}`.slice(0, 500) };
     const frameBytes = TRIAL_W * TRIAL_H * 4;
-    if (decoded.stdout.length !== frameBytes * TRIAL_FRAMES) {
-      return { encoder, result: 'failed', detail: `decoded ${decoded.stdout.length / frameBytes} of ${TRIAL_FRAMES} frames` };
+    const solid = TRIAL_FRAMES - TRIAL_MOTION_FRAMES;
+    if (decoded.stdout.length !== frameBytes * solid) {
+      return { encoder, result: 'failed', detail: `decoded ${decoded.stdout.length / frameBytes} of ${solid} solid frames` };
     }
     // 运动之后的每一帧纯色都要过（第一帧最难：紧跟在运动后面，和转场的末帧一样）
     let maxError = 0;
     let maxOver = 0;
-    for (let i = TRIAL_MOTION_FRAMES; i < TRIAL_FRAMES; i++) {
+    for (let i = 0; i < solid; i++) {
       const e = solidFrameError(decoded.stdout.subarray(frameBytes * i, frameBytes * (i + 1)));
       maxError = Math.max(maxError, e.worst);
       maxOver = Math.max(maxOver, e.over);

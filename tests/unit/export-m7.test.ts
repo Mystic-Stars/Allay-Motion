@@ -122,19 +122,20 @@ describe('FFmpeg 命令行（5.3）', () => {
     expect(h264Bitrate(1920, 1080, 30)).toBe(10_000_000);
   });
 
-  it('试编码：256×144、12 帧运动接 4 帧纯绿，与导出相同的色彩滤镜和比特流滤镜，编码器参数取 1080p60 导出时的', () => {
+  it('试编码：按默认的导出规格 1080p60，10 帧运动接 2 帧纯绿，与导出相同的色彩滤镜、编码器参数和比特流滤镜', () => {
     const args = trialArgs('h264_mf', 'probe.h264');
     const line = args.join(' ');
-    expect(line).toContain('testsrc2=s=256x144:r=30');
-    expect(line).toContain('color=c=0x00ff00:s=256x144:r=30');
-    expect(line).toContain('trim=end_frame=12');
-    expect(line).toContain('-frames:v 16');
+    expect(line).toContain('testsrc2=s=1920x1080:r=60');
+    expect(line).toContain('color=c=0x00ff00:s=1920x1080:r=60');
+    expect(line).toContain('trim=end_frame=10');
+    expect(line).toContain('-frames:v 12');
     expect(line).toContain(colorFilter('yuv420p'));
     expect(args).toContain(H264_METADATA_BSF);
     expect(line).toContain(h264EncoderArgs('h264_mf', 1920, 1080, 60).join(' '));
     expect(args.slice(-4)).toEqual(['-f', 'h264', '-y', 'probe.h264']);
     expect(trialArgs('h264_amf', 'x').join(' ')).toContain('-rc cqp -qp_i 18 -qp_p 18');
-    expect(trialDecodeArgs('probe.h264')).toEqual(['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', 'probe.h264', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+    // 只解出纯色的两帧
+    expect(trialDecodeArgs('probe.h264')).toEqual(['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', 'probe.h264', '-vf', "select='gte(n,10)'", '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
   });
 
   it('试编码里运动之后的纯色帧：和 T-EXP-7 判绿幕末帧同一口径（超过 4 的像素 < 0.1%，没有超过 16 的）', () => {
