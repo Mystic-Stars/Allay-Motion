@@ -211,14 +211,17 @@ test.describe('导出对话框与任务', () => {
         }
         firstLast.push({ i, over4, worst });
       });
+      // 数字先打出来再判定：判定不过时 CI 的日志里也看得到用的哪个编码器、误差多大
+      const encoder = /h264 encoders probed .*"encoder":"([^"]+)"/.exec(readMainLog(dir))?.[1];
+      const summary = `${gpu}; ${timings.join(', ')}; h264=${encoder}; key error ${firstLast.map((f) => `#${f.i} max ${f.worst}, >4: ${f.over4}`).join(' / ')}`;
+      test.info().annotations.push({ type: 'T-EXP-7 seconds', description: summary });
+      console.log(`[T-EXP-7] ${summary}`);
+      expect(encoder).toBeTruthy();
       expect(firstLast.map((f) => f.i)).toEqual([0, 66]);
       for (const f of firstLast) {
         expect(f.over4 / (1920 * 1080), `frame ${f.i}`).toBeLessThan(0.001);
         expect(f.worst, `frame ${f.i}`).toBeLessThanOrEqual(16);
       }
-      const encoder = /h264 encoders probed .*"encoder":"([^"]+)"/.exec(readMainLog(dir))?.[1];
-      expect(encoder).toBeTruthy();
-      test.info().annotations.push({ type: 'T-EXP-7 seconds', description: `${gpu}; ${timings.join(', ')}; h264=${encoder}; key error ${firstLast.map((f) => `#${f.i} max ${f.worst}, >4: ${f.over4}`).join(' / ')}` });
       expect(readdirSync(out).filter((f) => f.includes('.partial'))).toEqual([]);
     } finally {
       await app.close();
