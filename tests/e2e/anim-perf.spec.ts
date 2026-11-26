@@ -3,9 +3,10 @@
 // - 模拟拖动：每个动画帧改一次（拖动时每次指针移动就是一次改动），连续 120 帧，量界面的帧间隔（主线程卡不卡）
 //   和预览在这段时间里实际更新了几次；
 // - 单次改动：改完等预览画好再改下一次，量“改动 → 预览画好”的延迟。
-// 数字打印出来写进文档；断言只防明显退化。
+// 数字打印出来写进文档；断言只防明显退化。软件渲染（CI 的 WARP）下只记数字、不判定（docs/decisions.md M8 的放宽清单）。
 import { expect, test, type Page } from '@playwright/test';
-import { launchApp, makeUserDataDir, removeUserDataDir, type Launched } from './helpers';
+import { launchApp, makeUserDataDir, removeUserDataDir, rendererOf, type Launched } from './helpers';
+import { isSoftwareRenderer } from '../engine/software';
 
 let launched: Launched | null = null;
 let dir = '';
@@ -90,6 +91,10 @@ test('T-ANIM-32 大文档（64 层、256 份复制、每层 16 个关键帧）�
   dir = makeUserDataDir();
   launched = await launchApp(dir);
   const { page } = launched;
+  // 软件渲染下每帧真要约两帧（CI 上界面帧间隔中位数 30–35 ms，不是 60 Hz 帧长的整数倍），贴着判定线随机过不过；
+  // 同 T-EXP-7、T-ARC-7，只把数字打进日志和注解看趋势，不判定。有显卡时判定照旧
+  const gpu = await rendererOf(page);
+  const software = isSoftwareRenderer(gpu);
   await dispatch(page, 'animNew', { name: 'Perf' });
   expect(((await dispatch(page, 'animSetText', { text: JSON.stringify(bigDoc(), null, 2) })) as { ok: boolean }).ok).toBe(true);
   await page.evaluate(() => window.__allayTest!.setTime(0.9));
@@ -100,7 +105,10 @@ test('T-ANIM-32 大文档（64 层、256 份复制、每层 16 个关键帧）�
     const d = await drag(page, 120, edit);
     const ui = stats(d.frames);
     const l = stats(await latency(page, 30, edit));
-    console.log(`T-ANIM-32 ${edit}: ui-frame ${JSON.stringify(ui)} preview-updates/s ${d.updatesPerSecond.toFixed(1)} latency ${JSON.stringify(l)}`);
+    const line = `T-ANIM-32 ${edit}: ui-frame ${JSON.stringify(ui)} preview-updates/s ${d.updatesPerSecond.toFixed(1)} latency ${JSON.stringify(l)}`;
+    console.log(software ? `${line} （软件渲染 ${gpu}：只记不判）` : line);
+    test.info().annotations.push({ type: `T-ANIM-32 ${edit}`, description: software ? `${line}; ${gpu}（软件渲染：只记不判）` : line });
+    if (software) continue;
     // 防退化：界面的帧间隔中位数在两帧以内、预览每秒至少更新 15 次、单次延迟中位数 100 ms 以内
     expect(ui.median).toBeLessThan(34);
     expect(d.updatesPerSecond).toBeGreaterThan(15);
