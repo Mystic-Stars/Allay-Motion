@@ -149,14 +149,24 @@ export const EncoderAttemptSchema = z.strictObject({
   encoder: z.string().max(64),
   /** unlisted：-encoders 里没有，没试；ok：试编码成功；failed：试编码失败 */
   result: z.enum(['unlisted', 'ok', 'failed']),
-  /** 失败时 stderr 的最后一行（截断） */
+  /** 失败时 stderr 的最后一行，或画质不过的原因（截断） */
   detail: z.string().max(500).optional(),
+  /** 试编码末帧（运动之后的纯色帧）每个通道的最大误差；编解码都成功时才有 */
+  maxError: z.number().int().min(0).max(255).optional(),
 });
 export type EncoderAttempt = z.infer<typeof EncoderAttemptSchema>;
+
+/**
+ * 探测方法的版本：2 = 试编码以后解回来核对末帧画质（docs/05-export.md 5.3）。缓存里没有这一项或版本不同的结果
+ * 当作过期、重新探测（1 只看能不能编出来，CI 的机器上会选中末帧有残影的 h264_amf）
+ */
+export const H264_PROBE_CHECK = 2;
 
 export const H264ProbeSchema = z.strictObject({
   /** 探测时的 FFmpeg 版本（ffmpeg -version 的第一行）；版本变了缓存作废 */
   ffmpegVersion: z.string().max(300),
+  /** 探测方法的版本（H264_PROBE_CHECK）；旧缓存没有这一项 */
+  check: z.number().int().optional(),
   /** 胜出的编码器；全部失败时为 null */
   encoder: z.string().max(64).nullable(),
   attempts: z.array(EncoderAttemptSchema).max(16),

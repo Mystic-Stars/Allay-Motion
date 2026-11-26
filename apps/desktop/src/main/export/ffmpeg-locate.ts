@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { promisify } from 'node:util';
-import { EXPORT_PRESETS, H264_ENCODERS, type ExportPreset, type FfmpegInfo, type H264Probe, type PresetBlocker } from '../../shared/export';
+import { EXPORT_PRESETS, H264_ENCODERS, H264_PROBE_CHECK, type ExportPreset, type FfmpegInfo, type H264Probe, type PresetBlocker } from '../../shared/export';
 import { PRESET_ENCODERS } from './ffmpeg-args';
 
 const run = promisify(execFile);
@@ -70,7 +70,7 @@ export async function probeCaps(ffmpeg: string | null): Promise<FfmpegCaps> {
 export function buildInfo(caps: FfmpegCaps, h264: H264Probe | null, candidates: readonly string[] = H264_ENCODERS): FfmpegInfo {
   const presets = {} as Record<ExportPreset, boolean>;
   const blockers = {} as Record<ExportPreset, PresetBlocker>;
-  const usableProbe = h264 && caps.version !== null && h264.ffmpegVersion === caps.version ? h264 : null;
+  const usableProbe = h264 && caps.version !== null && h264.ffmpegVersion === caps.version && h264.check === H264_PROBE_CHECK ? h264 : null;
   for (const p of EXPORT_PRESETS) {
     let blocker: PresetBlocker = null;
     if (!caps.available) blocker = 'ffmpeg-missing';

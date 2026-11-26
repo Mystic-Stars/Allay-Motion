@@ -208,7 +208,7 @@ export function ExportPage() {
         <SettingsRow
           label={t('settings.encoders')}
           hint={
-            <span className="num" data-testid="h264-encoder" title={h264 ? h264.attempts.map((a) => `${a.encoder}: ${a.result}`).join('\n') : undefined}>
+            <span className="num" data-testid="h264-encoder" title={h264 ? h264.attempts.map((a) => `${a.encoder}: ${a.result}${a.detail ? ` — ${a.detail}` : ''}`).join('\n') : undefined}>
               {probing ? t('settings.encoderProbing') : !info?.available ? t('export.errors.ffmpegMissing') : h264 ? (h264.encoder ?? t('settings.encoderNone')) : t('settings.encoderNotProbed')}
             </span>
           }

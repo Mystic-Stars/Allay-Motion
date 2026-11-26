@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { H264_METADATA_BSF, PRESET_AUDIO_ARGS, colorFilter, ffmpegArgs, h264Bitrate, h264EncoderArgs } from '../../apps/desktop/src/main/export/ffmpeg-args';
 import { buildInfo } from '../../apps/desktop/src/main/export/ffmpeg-locate';
-import { trialArgs } from '../../apps/desktop/src/main/export/encoder-probe';
+import { TRIAL_FLAT_ERROR, TRIAL_FLAT_RATIO, TRIAL_MAX_ERROR, solidFrameError, trialArgs, trialDecodeArgs } from '../../apps/desktop/src/main/export/encoder-probe';
 import {
   EXPORT_PRESETS,
   ExportStartSchema,
@@ -12,6 +12,7 @@ import {
   exportBaseName,
   frameTimecode,
   sanitizeFileName,
+  H264_PROBE_CHECK,
   type H264Probe,
 } from '../../apps/desktop/src/shared/export';
 import { defaultSettingsFile, SettingsFileSchema } from '../../apps/desktop/src/shared/settings';
@@ -121,19 +122,33 @@ describe('FFmpeg 命令行（5.3）', () => {
     expect(h264Bitrate(1920, 1080, 30)).toBe(10_000_000);
   });
 
-  it('试编码：256×144、8 帧、空设备，带与导出相同的色彩滤镜和比特流滤镜', () => {
-    const args = trialArgs('h264_mf');
-    expect(args.join(' ')).toContain('color=c=black:s=256x144:r=30');
-    expect(args.join(' ')).toContain('-frames:v 8');
-    expect(args.slice(-3)).toEqual(['-f', 'null', '-']);
+  it('试编码：256×144、12 帧运动接 4 帧纯绿，与导出相同的色彩滤镜和比特流滤镜，编码器参数取 1080p60 导出时的', () => {
+    const args = trialArgs('h264_mf', 'probe.h264');
+    const line = args.join(' ');
+    expect(line).toContain('testsrc2=s=256x144:r=30');
+    expect(line).toContain('color=c=0x00ff00:s=256x144:r=30');
+    expect(line).toContain('trim=end_frame=12');
+    expect(line).toContain('-frames:v 16');
+    expect(line).toContain(colorFilter('yuv420p'));
     expect(args).toContain(H264_METADATA_BSF);
-    expect(args).toContain(colorFilter('yuv420p'));
+    expect(line).toContain(h264EncoderArgs('h264_mf', 1920, 1080, 60).join(' '));
+    expect(args.slice(-4)).toEqual(['-f', 'h264', '-y', 'probe.h264']);
+    expect(trialArgs('h264_amf', 'x').join(' ')).toContain('-rc cqp -qp_i 18 -qp_p 18');
+    expect(trialDecodeArgs('probe.h264')).toEqual(['-hide_banner', '-loglevel', 'error', '-f', 'h264', '-i', 'probe.h264', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+  });
+
+  it('试编码里运动之后的纯色帧：和 T-EXP-7 判绿幕末帧同一口径（超过 4 的像素 < 0.1%，没有超过 16 的）', () => {
+    expect([TRIAL_FLAT_ERROR, TRIAL_FLAT_RATIO, TRIAL_MAX_ERROR]).toEqual([4, 0.001, 16]);
+    expect(solidFrameError(new Uint8Array([0, 255, 0, 255, 0, 255, 0, 255]))).toEqual({ worst: 0, over: 0 });
+    expect(solidFrameError(new Uint8Array([3, 251, 2, 255, 0, 255, 0, 0]))).toEqual({ worst: 4, over: 0 });
+    // 每个像素取三个通道里最大的差，超过 4 的按像素数
+    expect(solidFrameError(new Uint8Array([5, 250, 0, 255, 42, 213, 0, 255]))).toEqual({ worst: 42, over: 2 });
   });
 });
 
 describe('预设可用性', () => {
   const caps = (encoders: string[]) => ({ available: true, version: 'ffmpeg version n9', encoders: new Set(encoders) });
-  const probe = (encoder: string | null, version = 'ffmpeg version n9'): H264Probe => ({ ffmpegVersion: version, encoder, attempts: [], probedAt: '2026-11-13T00:00:00.000Z' });
+  const probe = (encoder: string | null, version = 'ffmpeg version n9'): H264Probe => ({ ffmpegVersion: version, check: H264_PROBE_CHECK, encoder, attempts: [], probedAt: '2026-11-13T00:00:00.000Z' });
 
   it('FFmpeg 不能用：全部禁用', () => {
     const info = buildInfo({ available: false, version: null, encoders: new Set() }, null);
@@ -153,6 +168,12 @@ describe('预设可用性', () => {
     const stale = buildInfo(caps(['h264_mf']), probe(null, 'ffmpeg version n8'));
     expect(stale.h264).toBeNull();
     expect(stale.presets['greenscreen-mp4']).toBe(true);
+    // 旧的探测方法（不核对画质）写下的缓存没有 check：当作过期，导出前重新探测
+    const legacy = probe('h264_amf');
+    delete legacy.check;
+    const unchecked = buildInfo(caps(['h264_amf', 'h264_mf']), legacy);
+    expect(unchecked.h264).toBeNull();
+    expect(unchecked.presets['greenscreen-mp4']).toBe(true);
   });
   it('设置文件：导出这一项坏了只回退它自己', () => {
     const parsed = SettingsFileSchema.parse({ ...defaultSettingsFile(), export: { folder: 42, h264: null } });

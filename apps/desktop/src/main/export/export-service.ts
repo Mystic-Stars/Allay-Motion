@@ -16,6 +16,7 @@ import {
   type ExportStepResult,
   type FfmpegInfo,
   type H264Probe,
+  H264_PROBE_CHECK,
 } from '../../shared/export';
 import type { Logger } from '../logger';
 import type { SettingsStore } from '../settings-store';
@@ -97,7 +98,7 @@ export class ExportService {
     const ffmpeg = this.ffmpegPath();
     if (!caps.available || !caps.version || !ffmpeg) return null;
     const cached = this.opts.settings.exportSettings.h264;
-    if (!force && cached && cached.ffmpegVersion === caps.version) return cached;
+    if (!force && cached && cached.ffmpegVersion === caps.version && cached.check === H264_PROBE_CHECK) return cached;
     const result = await probeH264({ ffmpeg, version: caps.version, listed: caps.encoders, candidates: this.opts.h264Candidates ?? undefined });
     await this.opts.settings.updateExport({ h264: result });
     this.opts.log.info('export', 'h264 encoders probed', { encoder: result.encoder, attempts: result.attempts });
